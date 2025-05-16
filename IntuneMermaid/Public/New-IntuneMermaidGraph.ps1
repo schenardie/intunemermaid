@@ -519,10 +519,15 @@ function New-IntuneMermaidGraph {
                                 }
                             }
                         }                    
-
+                        
                         # Pre-populate group cache with all unique group IDs
-                        Write-Verbose "Pre-populating group cache with $($uniqueGroupIds.Count) unique group IDs"
-                        [void](Get-GroupDisplayName -groupId $uniqueGroupIds)
+                        if ($uniqueGroupIds -and $uniqueGroupIds.Count -gt 0) {
+                            Write-Verbose "Pre-populating group cache with $($uniqueGroupIds.Count) unique group IDs"
+                            [void](Get-GroupDisplayName -groupId $uniqueGroupIds)
+                        }
+                        else {
+                            Write-Verbose "No entra group IDs found to pre-populate in cache"
+                        }
 
                         # Group applications by assignments
                         Write-Verbose "Grouping applications by assignments"
