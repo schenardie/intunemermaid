@@ -3,7 +3,7 @@
 Creates a Mermaid diagram node for an application or its assignments.
 
 .DESCRIPTION
-The New-MermaidNode function generates a Mermaid diagram node based on the specified node type. 
+The New-MermaidNode function generates a Mermaid diagram node based on the specified node type.
 It supports creating nodes for applications and their assignments, including handling images and assignment filters.
 
 .PARAMETER NodeType
@@ -55,13 +55,13 @@ function New-MermaidNode {
     if (-not (Get-Variable -Name groupCache -Scope Script -ErrorAction SilentlyContinue)) {
         $script:groupCache = @{}
     }
-    
+
     # Helper function to get group display name with caching
     function Get-GroupDisplayName {
         param (
             [string]$groupId
         )
-        
+
         if (-not $script:groupCache.ContainsKey($groupId)) {
             try {
                 $groupInfo = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/directoryObjects/$groupId").displayName
@@ -77,7 +77,7 @@ function New-MermaidNode {
                 }
             }
         }
-        
+
         return $script:groupCache[$groupId]
     }
 
@@ -91,7 +91,7 @@ function New-MermaidNode {
         param (
             [string]$filterId
         )
-        
+
         if (-not $script:filterCache.ContainsKey($filterId)) {
             try {
                 $filterName = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters/${filterId}?`$select=displayName").displayName.replace("(", "").replace(")", "")
@@ -101,7 +101,7 @@ function New-MermaidNode {
                 $script:filterCache[$filterId] = "Filter not found"
             }
         }
-        
+
         return $script:filterCache[$filterId]
     }
 
@@ -110,7 +110,7 @@ function New-MermaidNode {
             if ($appImage) {
                 $mermaidDiagram += @"
 subgraph $($appId)_$($ID)["$appName"]
-    $($appId)_$($ID)-Name["<img src='data:;base64, $appImage' width='50' height='50'>"] 
+    $($appId)_$($ID)-Name["<img src='data:;base64, $appImage' width='50' height='50'>"]
 end
 "@
             }
@@ -143,11 +143,11 @@ end
 
                 # Use constants for special group IDs
                 if (($assignment.id -split '_')[0] -eq "acacacac-9df4-4c7d-9d50-4ef0226f57a9") { $GroupName = "All Users" }
-                elseif (($assignment.id -split '_')[0] -eq "adadadad-808e-44e2-905a-0b7873a8a531") { $GroupName = "All Devices" } 
-                else { 
+                elseif (($assignment.id -split '_')[0] -eq "adadadad-808e-44e2-905a-0b7873a8a531") { $GroupName = "All Devices" }
+                else {
                     $targetGroupId = $assignment.target.groupId
                     $GroupName = (Get-GroupDisplayName -groupId $targetGroupId).Shortname
-                }                
+                }
 
                 if ($odataType -match '#microsoft\.graph\.(allDevicesAssignmentTarget|allLicensedUsersAssignmentTarget|groupAssignmentTarget)$') {
                     $mode = 'Included'
@@ -176,7 +176,7 @@ end
                     $filterId = $assignment.target.deviceAndAppManagementAssignmentFilterId
                     $filterName = Get-FilterDisplayName -filterId $filterId
                     $filterStatus = $assignment.target.deviceAndAppManagementAssignmentFilterType
-                    $outputLines += "$assignId[`"fa:fa-users $GroupName`"]-->|fa:fa-filter $filterStatus|$("f" + $ID)[$filterName]"
+                    $outputLines += "$assignId[`"fa:fa-users $GroupName`"]-->|fa:fa-filter $filterStatus|$("f" + $ID)[`"$filterName`"]"
                 }
                 else {
                     $outputLines += "$assignId[`"fa:fa-users $GroupName`"]"
@@ -199,11 +199,11 @@ end
                 $odataType = $assignment.target.'@odata.type'
 
                 if (($assignment.id -split '_')[0] -eq "acacacac-9df4-4c7d-9d50-4ef0226f57a9") { $GroupName = "All Users" }
-                elseif (($assignment.id -split '_')[0] -eq "adadadad-808e-44e2-905a-0b7873a8a531") { $GroupName = "All Devices" } 
-                else { 
+                elseif (($assignment.id -split '_')[0] -eq "adadadad-808e-44e2-905a-0b7873a8a531") { $GroupName = "All Devices" }
+                else {
                     $targetGroupId = $assignment.target.groupId
                     $GroupName = (Get-GroupDisplayName -groupId $targetGroupId).Shortname
-                }                
+                }
 
                 if ($odataType -match '#microsoft\.graph\.(allDevicesAssignmentTarget|allLicensedUsersAssignmentTarget|groupAssignmentTarget)$') {
                     $mode = 'Included'
@@ -232,7 +232,7 @@ end
                     $filterId = $assignment.target.deviceAndAppManagementAssignmentFilterId
                     $filterName = Get-FilterDisplayName -filterId $filterId
                     $filterStatus = $assignment.target.deviceAndAppManagementAssignmentFilterType
-                    $outputLines += "$assignId[`"fa:fa-users $GroupName`"]-->|fa:fa-filter $filterStatus|$("f" + $ID)[$filterName]"
+                    $outputLines += "$assignId[`"fa:fa-users $GroupName`"]-->|fa:fa-filter $filterStatus|$("f" + $ID)[`"$filterName`"]"
                 }
                 else {
                     $outputLines += "$assignId[`"fa:fa-users $GroupName`"]"
@@ -248,11 +248,11 @@ end
             foreach ($assignment in $assignmentsInfo) {
 
                 if ($assignment.target.'@odata.type' -eq "#microsoft.graph.allLicensedUsersAssignmentTarget") { $GroupName = "All Users" }
-                elseif ($assignment.target.'@odata.type' -eq "#microsoft.graph.allDevicesAssignmentTarget") { $GroupName = "All Devices" } 
-                else { 
+                elseif ($assignment.target.'@odata.type' -eq "#microsoft.graph.allDevicesAssignmentTarget") { $GroupName = "All Devices" }
+                else {
                     $targetGroupId = $assignment.target.groupId
                     $GroupName = (Get-GroupDisplayName -groupId $targetGroupId).Shortname
-                }                
+                }
 
                 if ($assignment.target.'@odata.type' -match '#microsoft\.graph\.(allDevicesAssignmentTarget|allLicensedUsersAssignmentTarget|groupAssignmentTarget)$') {
                     $mode = 'Included'
@@ -278,7 +278,7 @@ end
                     $filterId = $assignment.target.deviceAndAppManagementAssignmentFilterId
                     $filterName = Get-FilterDisplayName -filterId $filterId
                     $filterStatus = $assignment.target.deviceAndAppManagementAssignmentFilterType
-                    $outputLines += "$name[`"fa:fa-users $GroupName`"]-->|fa:fa-filter $filterStatus|$("f" + $ID)[$filterName]"
+                    $outputLines += "$name[`"fa:fa-users $GroupName`"]-->|fa:fa-filter $filterStatus|$("f" + $ID)[`"$filterName`"]"
                 }
                 else {
                     $outputLines += "$name[`"fa:fa-users $GroupName`"]"
@@ -294,11 +294,11 @@ end
             foreach ($assignment in $assignmentsInfo) {
 
                 if ($assignment.target.'@odata.type' -eq "#microsoft.graph.allLicensedUsersAssignmentTarget") { $GroupName = "All Users" }
-                elseif ($assignment.target.'@odata.type' -eq "#microsoft.graph.allDevicesAssignmentTarget") { $GroupName = "All Devices" } 
-                else { 
+                elseif ($assignment.target.'@odata.type' -eq "#microsoft.graph.allDevicesAssignmentTarget") { $GroupName = "All Devices" }
+                else {
                     $targetGroupId = $assignment.target.groupId
                     $GroupName = (Get-GroupDisplayName -groupId $targetGroupId).Shortname
-                }                
+                }
 
                 if ($assignment.target.'@odata.type' -match '#microsoft\.graph\.(allDevicesAssignmentTarget|allLicensedUsersAssignmentTarget|groupAssignmentTarget)$') {
                     $mode = 'Included'
@@ -324,7 +324,7 @@ end
                     $filterId = $assignment.target.deviceAndAppManagementAssignmentFilterId
                     $filterName = Get-FilterDisplayName -filterId $filterId
                     $filterStatus = $assignment.target.deviceAndAppManagementAssignmentFilterType
-                    $outputLines += "$name[`"fa:fa-users $GroupName`"]-->|fa:fa-filter $filterStatus|$("f" + $ID)[$filterName]"
+                    $outputLines += "$name[`"fa:fa-users $GroupName`"]-->|fa:fa-filter $filterStatus|$("f" + $ID)[`"$filterName`"]"
                 }
                 else {
                     $outputLines += "$name[`"fa:fa-users $GroupName`"]"
@@ -335,6 +335,6 @@ end
 
             return $outputLines
         }
-    
+
     }
 }
