@@ -158,18 +158,45 @@ function New-IntuneMermaidGraph {
     }
 
     Begin {
-        $requiredScopes = @("DeviceManagementApps.Read.All", "GroupMember.Read.All", "DeviceManagementConfiguration.Read.All")
+        $requiredScopeCategories = @{
+            "Groups" = @("GroupMember.Read.All", "Group.Read.All", "Group.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All")
+            "Apps" = @("DeviceManagementApps.Read.All", "DeviceManagementApps.ReadWrite.All")
+            "Configuration" = @("DeviceManagementConfiguration.Read.All", "DeviceManagementConfiguration.ReadWrite.All")
+        }
         
         # Ensure required authentication header variable exists
         if ($null -eq (Get-MgContext)) { 
-            throw  "Microsoft Graph authentication required. Please run `"Connect-MgGraph -scopes $($requiredScopes -join ', ')`""
+            $requiredScopesMessage = $requiredScopeCategories.Keys | ForEach-Object { 
+                "$($requiredScopeCategories[$_][0])"
+            }
+            throw "Microsoft Graph authentication required. Please run `"Connect-MgGraph -scopes $($requiredScopesMessage -join ', ')`" at a minimum."
         }
         else {
             $currentScopes = (Get-MgContext).Scopes
-            $missingScopes = $requiredScopes | Where-Object { $_ -notin $currentScopes }
-            if ($missingScopes -and (Get-MgContext).AuthType -ne 'UserProvidedAccessToken') { 
-                throw "Microsoft Graph token found, but missing required scopes. Please run `"Connect-MgGraph -scopes $($requiredScopes -join ', ')`""
-            } 
+            $missingCategories = @()
+
+            foreach ($category in $requiredScopeCategories.Keys) {
+                $categoryScopes = $requiredScopeCategories[$category]
+                $hasRequiredScope = $false
+                
+                foreach ($scope in $categoryScopes) {
+                    if ($scope -in $currentScopes) {
+                        $hasRequiredScope = $true
+                        break
+                    }
+                }
+                
+                if (-not $hasRequiredScope -and (Get-MgContext).AuthType -ne 'UserProvidedAccessToken') {
+                    $missingCategories += $category
+                }
+            }
+            
+            if ($missingCategories.Count -gt 0) {
+                $missingScopesMessage = $missingCategories | ForEach-Object { 
+                    "${_}: $($requiredScopeCategories[$_] -join ' / ')"
+                }
+                throw "Microsoft Graph token found, but missing required scopes. Please ensure you have at least one permission from each category:`n$($missingScopesMessage -join "`n")"
+            }
         }
 
         # Set script variable for error action preference
