@@ -5,4 +5,6 @@
 
 ## 1.0.3
 - Added a fix to support Filter Names with special characters
+
+## 1.0.4
 - Added a fix to support tenant where only virtual groups (All Devices and All Users) are in use, so the pre-populate function is not invoked

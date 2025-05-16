@@ -640,10 +640,16 @@ function New-IntuneMermaidGraph {
                                     $uniqueGroupIds += $assignment.target.groupId
                                 }
                             }
-                        }                    
+                        }
+
                         # Pre-populate group cache with all unique group IDs
-                        Write-Verbose "Pre-populating group cache with $($uniqueGroupIds.Count) unique group IDs"
-                        [void](Get-GroupDisplayName -groupId $uniqueGroupIds)
+                        if ($uniqueGroupIds -and $uniqueGroupIds.Count -gt 0) {
+                            Write-Verbose "Pre-populating group cache with $($uniqueGroupIds.Count) unique group IDs"
+                            [void](Get-GroupDisplayName -groupId $uniqueGroupIds)
+                        }
+                        else {
+                            Write-Verbose "No entra group IDs found to pre-populate in cache"
+                        }
 
                         # Get filter display names
                         Write-Verbose "Getting filter display names"
@@ -1025,8 +1031,13 @@ function New-IntuneMermaidGraph {
                             }
                         }                    
                         # Pre-populate group cache with all unique group IDs
-                        Write-Verbose "Pre-populating group cache with $($uniqueGroupIds.Count) unique group IDs"
-                        [void](Get-GroupDisplayName -groupId $uniqueGroupIds)   
+                        if ($uniqueGroupIds -and $uniqueGroupIds.Count -gt 0) {
+                            Write-Verbose "Pre-populating group cache with $($uniqueGroupIds.Count) unique group IDs"
+                            [void](Get-GroupDisplayName -groupId $uniqueGroupIds)
+                        }
+                        else {
+                            Write-Verbose "No entra group IDs found to pre-populate in cache"
+                        }
 
                         # Group policies by assignments
                         Write-Verbose "Grouping policies by assignments"
@@ -1192,8 +1203,13 @@ function New-IntuneMermaidGraph {
                             }
                         }                    
                         # Pre-populate group cache with all unique group IDs
-                        Write-Verbose "Pre-populating group cache with $($uniqueGroupIds.Count) unique group IDs"
-                        [void](Get-GroupDisplayName -groupId $uniqueGroupIds)  
+                        if ($uniqueGroupIds -and $uniqueGroupIds.Count -gt 0) {
+                            Write-Verbose "Pre-populating group cache with $($uniqueGroupIds.Count) unique group IDs"
+                            [void](Get-GroupDisplayName -groupId $uniqueGroupIds)
+                        }
+                        else {
+                            Write-Verbose "No entra group IDs found to pre-populate in cache"
+                        }
 
                         # Filter by allPolicies by PolicyType, if specified
                         if ($PSBoundParameters.ContainsKey('PolicyType')) {
