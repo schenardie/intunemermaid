@@ -154,6 +154,20 @@ function New-IntuneMermaidGraph {
             $appTypeParam.Value = @()
             $paramDictionary.Add('ApplicationType', $appTypeParam)
         }
+        # Only add AppendVersion parameter if Type is "Applications"
+        if ($Type -eq "Applications") {
+            $appendVersionAttribute = New-Object System.Management.Automation.ParameterAttribute
+            $appendVersionAttribute.Mandatory = $false
+            $appendVersionAttribute.Position = 0
+            $appendVersionAttribute.ValueFromPipelineByPropertyName = $true
+            $attributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
+            $attributeCollection.Add($appendVersionAttribute)
+            $appendVersionParam = New-Object System.Management.Automation.RuntimeDefinedParameter(
+            'AppendVersion', [bool], $attributeCollection
+            )
+            $appendVersionParam.Value = $False
+            $paramDictionary.Add('AppendVersion', $appendVersionParam)
+        }
         return $paramDictionary
     }
 
@@ -373,12 +387,11 @@ function New-IntuneMermaidGraph {
                 Write-Verbose "Processing applications type"
                 # Dictionary to map application odata types to friendly names
                 $AppTypeMap = @{
-                    '#microsoft.graph.androidEnterpriseSystemApp' = "Android Enterprise system app" 
                     '#microsoft.graph.androidForWorkApp'          = "Managed Google Play store app" 
                     '#microsoft.graph.androidManagedStoreApp'     = "Managed Google Play store app" 
+                    '#microsoft.graph.androidManagedStoreWebApp'  = "Managed Google Play store app"
                     '#microsoft.graph.androidLobApp'              = "Android line-of-business app" 
                     '#microsoft.graph.androidStoreApp'            = "Android store app" 
-                    '#microsoft.graph.builtInAndroid'             = "Built-In Android app" 
                     '#microsoft.graph.iosIPadOSWebClip'           = "iOS/iPadOS web clip" 
                     '#microsoft.graph.iosLobApp'                  = "iOS line-of-business app" 
                     '#microsoft.graph.iosStoreApp'                = "iOS store app" 
@@ -406,8 +419,73 @@ function New-IntuneMermaidGraph {
                 Write-Verbose "Application type mapping dictionary created"
                 
                 # Get all apps with assignments
-                Write-Verbose "Retrieving all applications with assignments"
-                $allAppsAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=(isAssigned eq true)&`$expand=Assignments"
+                Write-Verbose "Determining application types to include based on selected operating systems"
+                $appTypeFilter = @()
+                if ($OperatingSystem -contains "Windows") {
+                    Write-Verbose "Including Windows application types in filter"
+                    $appTypeFilter += @(
+                        "microsoft.graph.win32LobApp",
+                        "microsoft.graph.win32CatalogApp",
+                        "microsoft.graph.windowsMobileMSI",
+                        "microsoft.graph.windowsUniversalAppX",
+                        "microsoft.graph.windowsStoreApp",
+                        "microsoft.graph.winGetApp",
+                        "microsoft.graph.windowsMicrosoftEdgeApp",
+                        "microsoft.graph.officeSuiteApp",
+                        "microsoft.graph.windowsWebApp"
+                    )
+                }
+                if ($OperatingSystem -contains "iOS") {
+                    Write-Verbose "Including iOS application types in filter"
+                    $appTypeFilter += @(
+                        "microsoft.graph.iosStoreApp",
+                        "microsoft.graph.iosVppApp",
+                        "microsoft.graph.iosLobApp",
+                        "microsoft.graph.managedIOSStoreApp",
+                        "microsoft.graph.iosIPadOSWebClip"
+                    )
+                }
+                if ($OperatingSystem -contains "Android") {
+                    Write-Verbose "Including Android application types in filter"
+                    $appTypeFilter += @(
+                        "microsoft.graph.androidStoreApp",
+                        "microsoft.graph.androidLobApp",
+                        "microsoft.graph.androidForWorkApp",
+                        "microsoft.graph.androidManagedStoreApp"
+                        "microsoft.graph.androidManagedStoreWebApp",
+                        "microsoft.graph.webApp"
+                    )
+                }
+                if ($OperatingSystem -contains "macOS") {
+                    Write-Verbose "Including macOS application types in filter"
+                    $appTypeFilter += @(
+                        "microsoft.graph.macOSLobApp",
+                        "microsoft.graph.macOSDmgApp",
+                        "microsoft.graph.macOSPkgApp",
+                        "microsoft.graph.macOsVppApp",
+                        "microsoft.graph.macOSWebClip",
+                        "microsoft.graph.macOSMicrosoftDefenderApp",
+                        "microsoft.graph.macOSMicrosoftEdgeApp",
+                        "microsoft.graph.macOSOfficeSuiteApp"
+                    )
+                }
+
+                # Handle the case where user selected no OS types or web apps
+                if ($appTypeFilter.Count -eq 0) {
+                    Write-Verbose "No specific OS selected, retrieving all applications with assignments"
+                    $allAppsAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=(isAssigned eq true)&`$expand=Assignments"
+                }
+                else {
+                    # Create OData filter for application types
+                    $typeFilter = $appTypeFilter | ForEach-Object { "isof('$_')" }
+                    $filterString = $typeFilter -join " or "
+                    
+                    Write-Verbose "Retrieving applications with assignments matching selected OS types: $($OperatingSystem -join ', ')"
+                    Write-Verbose "Using filter: $filterString"
+                    
+                    $allAppsAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=((isAssigned eq true) and ($filterString))&`$expand=Assignments"
+                }
+
                 Write-Verbose "Retrieved $($allAppsAndAssignments.Count) applications with assignments"
                 
                 # Replace @odata.type with friendly names
@@ -464,6 +542,15 @@ function New-IntuneMermaidGraph {
                     }
                 }
 
+                # If AppendVersion is specified, append the version to the display name
+                if ($PSBoundParameters.ContainsKey('AppendVersion') -and $PSBoundParameters.AppendVersion) {
+                    Write-Verbose "Appending version to display name for each application"
+                    foreach ($app in $allAppsAndAssignments) {
+                        if ($app.displayVersion) {
+                            $app.displayName += " $($app.displayVersion)"
+                        }
+                    }
+                }
                 # Initialize the flowchart
                 Write-Verbose "Initializing mermaid flowchart with direction: $Direction"
                 $mermaidFlowchart = Initialize-Flowchart -Direction $Direction
@@ -552,7 +639,7 @@ function New-IntuneMermaidGraph {
                         $AssignmentsGroupedByOS = @()
                         foreach ($assignmentGroup in $GroupedByAssignments) {
                             $osType = switch -Regex ($assignmentGroup.'OdataType') {
-                                'android|graph.webApp' { 'Android' }
+                                'android|Google|^Web link$' { 'Android' }
                                 'ios' { 'iOS' }
                                 'macos' { 'macOS' }
                                 Default { 'Windows' }
@@ -666,7 +753,7 @@ function New-IntuneMermaidGraph {
                         $GroupedByOS = @()
                         foreach ($assignmentGroup in $GroupTypes) {
                             $osType = switch -Regex ($assignmentGroup.Name) {
-                                'android|graph.webApp' { 'Android' }
+                                'android|Google|^Web link$' { 'Android' }
                                 'ios' { 'iOS' }
                                 'macos' { 'macOS' }
                                 Default { 'Windows' }
