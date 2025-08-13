@@ -14,3 +14,6 @@
 - Fixed Operating System groupping function that was returning 'Managed Google Play store app' under Windows
 - Implemented filtering based on operating system. Now when you select only one operating system the graph query will filter in only the types related to said os, making the queries leaner and faster.
 - Added new dynamic property `AppendVersion` of boolean type. If set to `$true` it append the field `displayVersion` to `displayName` 
+
+## 1.1.1
+- Added new dynamic property `ExcludeSupersededApps` of boolean type. If set to `$true` it hiddes apps where supersedingAppCount is not 0 (zero). (addressing https://github.com/schenardie/intunemermaid/issues/5)
