@@ -42,6 +42,18 @@ Dynamic parameter that appears only when Type is "Applications".
 Allows filtering of applications by their application type.
 Includes values like "Windows app (Win32)", "iOS store app", "Android store app", etc.
 
+.PARAMETER AppendVersion
+Specifies whether to append version information to application display names in the flowchart.
+This parameter is only available when Type is "Applications".
+When set to $True, the application version will be appended to the display name in the flowchart.
+Default is $False.
+
+.PARAMETER ExcludeSupersededApps
+Specifies whether to exclude superseded applications from the flowchart.
+This parameter is only available when Type is "Applications".
+When set to $True, applications that are superseded will not be included in the flowchart.
+Default is $False.
+
 .EXAMPLE
 # Generate a Mermaid.js flowchart for applications grouped by assignments with icons displayed.
 New-IntuneMermaidGraph -Type "Applications" -GroupBy "Assignments" -DisplayIcons $True
@@ -167,6 +179,20 @@ function New-IntuneMermaidGraph {
             )
             $appendVersionParam.Value = $False
             $paramDictionary.Add('AppendVersion', $appendVersionParam)
+        }
+        # Only add ExcludeSupersededApps parameter if Type is "Applications"
+        if ($Type -eq "Applications") {
+            $excludeSupersededAppsAttribute = New-Object System.Management.Automation.ParameterAttribute
+            $excludeSupersededAppsAttribute.Mandatory = $false
+            $excludeSupersededAppsAttribute.Position = 1
+            $excludeSupersededAppsAttribute.ValueFromPipelineByPropertyName = $true
+            $attributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
+            $attributeCollection.Add($excludeSupersededAppsAttribute)
+            $excludeSupersededAppsParam = New-Object System.Management.Automation.RuntimeDefinedParameter(
+                'ExcludeSupersededApps', [bool], $attributeCollection
+            )
+            $excludeSupersededAppsParam.Value = $False
+            $paramDictionary.Add('ExcludeSupersededApps', $excludeSupersededAppsParam)
         }
         return $paramDictionary
     }
@@ -551,6 +577,14 @@ function New-IntuneMermaidGraph {
                         }
                     }
                 }
+
+                #If ExcludeSupersededApps is specified, filter out superseded applications
+                if ($PSBoundParameters.ContainsKey('ExcludeSupersededApps') -and $PSBoundParameters.ExcludeSupersededApps) {
+                    Write-Verbose "Excluding superseded applications from the flowchart"
+                    $allAppsAndAssignments = $allAppsAndAssignments | Where-Object { $_.supersedingAppCount -eq 0 }
+                    Write-Verbose "Filtered to $($allAppsAndAssignments.Count) applications after excluding superseded apps"
+                }
+                
                 # Initialize the flowchart
                 Write-Verbose "Initializing mermaid flowchart with direction: $Direction"
                 $mermaidFlowchart = Initialize-Flowchart -Direction $Direction
