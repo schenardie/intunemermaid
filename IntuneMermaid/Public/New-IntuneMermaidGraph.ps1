@@ -35,7 +35,21 @@ Default includes all operating systems.
 .PARAMETER PolicyType
 Dynamic parameter that appears only when Type is "Profiles".
 Allows filtering of configuration profiles by their policy type.
-Includes values like "Device restrictions", "Endpoint protection", "Administrative templates", etc.
+
+For Device Configuration profiles, use mapped friendly names such as:
+- "Custom", "Device restrictions", "Endpoint protection", "Administrative templates"
+- "Email", "VPN", "Wi-Fi", "SCEP certificate", "PKCS certificate", "Trusted certificate"
+- "Update rings for Windows updates", "Windows health monitoring", etc.
+
+For Settings Catalog policies, use the exact template display name such as:
+- "Local admin password solution (Windows LAPS)"
+- "Elevation rules policy", "Elevation settings policy"
+- "Device Preparation", "Local user group membership", etc.
+
+To discover available policy types in your tenant, you can:
+1. Run the function without PolicyType to see all available types in verbose output
+2. Query your policies directly: Get-MgDeviceManagementDeviceConfiguration | Select displayName, '@odata.type'
+3. For Settings Catalog: Get-MgDeviceManagementConfigurationPolicy | Select name, @{N='Template';E={$_.templateReference.templateDisplayName}}
 
 .PARAMETER ApplicationType
 Dynamic parameter that appears only when Type is "Applications".
@@ -53,6 +67,19 @@ Specifies whether to exclude superseded applications from the flowchart.
 This parameter is only available when Type is "Applications".
 When set to $True, applications that are superseded will not be included in the flowchart.
 Default is $False.
+
+.PARAMETER Offline
+Specifies whether to use offline mode instead of making API calls to retrieve data.
+When set to $True, the Data parameter must contain the applications or profiles data.
+In offline mode, group names and filter names will still be resolved via API if authentication is available.
+If no authentication is available, group and filter IDs will be displayed instead of names.
+
+.PARAMETER Data
+Specifies the data to use when in offline mode.
+Can be a JSON string, array, or object containing the applications or profiles data.
+For applications: Should contain an array of application objects with assignments.
+For profiles: Should contain an object with "deviceConfigurations" and "configurationPolicies" properties, each containing arrays of profile objects with assignments.
+This parameter becomes mandatory when the Offline parameter is specified.
 
 .EXAMPLE
 # Generate a Mermaid.js flowchart for applications grouped by assignments with icons displayed.
@@ -78,34 +105,97 @@ New-IntuneMermaidGraph -Type "Profiles" -OperatingSystem "iOS" -PolicyType "Devi
 # Generate a flowchart of profiles grouped by assignment groups for Android and iOS only.
 New-IntuneMermaidGraph -Type "Profiles" -GroupBy "Assignments" -OperatingSystem @("Android", "iOS")
 
+.EXAMPLE
+# Generate a flowchart using offline application data from a JSON file.
+$appData = Get-Content "C:\Path\To\Applications.json" | ConvertFrom-Json
+New-IntuneMermaidGraph -Type "Applications" -Offline -Data $appData
+
+.EXAMPLE
+# Generate a flowchart using offline profile data with custom object structure.
+$profileData = @{
+    deviceConfigurations = @(
+        # Array of device configuration objects with assignments
+    )
+    configurationPolicies = @(
+        # Array of configuration policy objects with assignments
+    )
+}
+New-IntuneMermaidGraph -Type "Profiles" -Offline -Data $profileData -GroupBy "Assignments"
+
+.EXAMPLE
+# Generate a flowchart using offline application data from a JSON string.
+$jsonString = '{"value": [{"id": "app1", "displayName": "Test App", "assignments": [...]}]}'
+New-IntuneMermaidGraph -Type "Applications" -Offline -Data $jsonString -DisplayIcons $false
+
+.EXAMPLE
+# Discover available policy types and filter by Settings Catalog template name.
+Get-IntunePolicyTypes -Online  # Shows available policy types in your tenant
+New-IntuneMermaidGraph -Type "Profiles" -PolicyType "Local admin password solution (Windows LAPS)"
+
+.EXAMPLE
+# Generate a flowchart using offline mode with authentication for group name resolution.
+Connect-MgGraph -Scopes "Group.Read.All"
+$appData = Get-Content "C:\Path\To\Applications.json" | ConvertFrom-Json
+New-IntuneMermaidGraph -Type "Applications" -Offline -Data $appData -GroupBy "Assignments"
+
+.EXAMPLE
+# Create sample offline data structure for testing.
+$sampleAppData = @(@{
+    id = "test-app-1"
+    displayName = "Sample Application"
+    '@odata.type' = "#microsoft.graph.win32LobApp"
+    assignments = @(@{
+        id = "assignment1"
+        intent = "required"
+        target = @{
+            '@odata.type' = "#microsoft.graph.allLicensedUsersAssignmentTarget"
+        }
+    })
+})
+New-IntuneMermaidGraph -Type "Applications" -Offline -Data $sampleAppData
+
 .NOTES
-- Requires the Microsoft Graph PowerShell module and proper authentication.
+- Requires the Microsoft Graph PowerShell module and proper authentication for online mode.
 - Ensure you have the necessary permissions to access the Microsoft Graph API (DeviceManagementApps.Read.All, GroupMember.Read.All, DeviceManagementConfiguration.Read.All).
 - The function caches Entra ID group display names to improve performance when retrieving multiple assignments.
 - Application and profile styles are modified based on their notes/description field values.
 - Output can be used directly with Mermaid.js visualization tools or libraries.
+- In offline mode, authentication is optional but recommended for group name and filter name resolution.
+- When using offline mode without authentication, group IDs and filter IDs will be displayed instead of names.
 
 #>
 function New-IntuneMermaidGraph {
+    [CmdletBinding(DefaultParameterSetName = "Online")]
     param (
-        [Parameter(Mandatory = $false)]
+        [Parameter(Mandatory = $true, ParameterSetName = "Online")]
+        [Parameter(Mandatory = $true, ParameterSetName = "Offline")]
         [ValidateSet("Applications", "Profiles")]
-        [string]$Type = "Applications",
+        [string]$Type,
 				
-        [Parameter(Mandatory = $false)]
+        [Parameter(Mandatory = $false, ParameterSetName = "Online")]
+        [Parameter(Mandatory = $false, ParameterSetName = "Offline")]
         [ValidateSet("Name", "Assignments")]
         [string]$GroupBy = "Name",
 
-        [Parameter(Mandatory = $false)]
+        [Parameter(Mandatory = $false, ParameterSetName = "Online")]
+        [Parameter(Mandatory = $false, ParameterSetName = "Offline")]
         [ValidateSet("Windows", "macOS", "iOS", "Android")]
         [array]$OperatingSystem = @("Windows", "macOS", "iOS", "Android"),
 
-        [Parameter(Mandatory = $false)]
+        [Parameter(Mandatory = $false, ParameterSetName = "Online")]
+        [Parameter(Mandatory = $false, ParameterSetName = "Offline")]
         [ValidateSet("TB", "TD", "BT", "LR", "RL")]
         [string]$Direction = "TB",
 		
-        [Parameter(Mandatory = $false)]
-        [bool]$DisplayIcons = $True
+        [Parameter(Mandatory = $false, ParameterSetName = "Online")]
+        [Parameter(Mandatory = $false, ParameterSetName = "Offline")]
+        [bool]$DisplayIcons = $True,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Offline")]
+        [switch]$Offline,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Offline")]
+        [object]$Data
 
     )
 
@@ -113,25 +203,12 @@ function New-IntuneMermaidGraph {
         # Create dictionary for dynamic parameters
         $paramDictionary = New-Object System.Management.Automation.RuntimeDefinedParameterDictionary
 
-        # Only add PolicyType parameter if Type is "Profiles"
-        if ($Type -eq "Profiles") {
+        # Only add PolicyType parameter if Type is "Profiles" or in Offline mode
+        if ($Type -eq "Profiles" -or $Offline) {
             $policyTypeAttribute = New-Object System.Management.Automation.ParameterAttribute
             $policyTypeAttribute.Mandatory = $false
-            $validateSetAttribute = New-Object System.Management.Automation.ValidateSetAttribute(
-                "Administrative templates", "App configuration", "Custom", "Derived credentials",
-                "Device features", "Device firmware", "Device restrictions", "Delivery optimization",
-                "Domain join", "Edition upgrade", "Education", "Email", "Endpoint protection",
-                "Expedited check-in", "Extensions", "Hardware configurations", "IKEv2 VPN",
-                "Identity protection", "Information protection", "Kiosk", "Microsoft Defender for Endpoint",
-                "Network boundary", "OMA-CP", "PFX certificate", "PKCS certificate",
-                "Policy override", "Preference file", "Presets", "SCEP certificate", 
-                "Secure assessment (Education)", "Settings Catalog", "Shared multi-user device", "Teams device restrictions",
-                "Trusted certificate", "Unsupported", "Update Configuration", "Update rings for Windows updates",
-                "VPN", "Wi-Fi", "Wi-Fi import", "Windows health monitoring", "Wired network"
-            )	
             $attributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
             $attributeCollection.Add($policyTypeAttribute)
-            $attributeCollection.Add($validateSetAttribute)
             $policyTypeParam = New-Object System.Management.Automation.RuntimeDefinedParameter(
                 'PolicyType', [array], $attributeCollection
             )
@@ -139,8 +216,8 @@ function New-IntuneMermaidGraph {
             $paramDictionary.Add('PolicyType', $policyTypeParam)
         }
 		
-        # Only add ApplicationType parameter if Type is "Applications"
-        if ($Type -eq "Applications") {
+        # Only add ApplicationType parameter if Type is "Applications" or in Offline mode
+        if ($Type -eq "Applications" -or $Offline) {
             $appTypeAttribute = New-Object System.Management.Automation.ParameterAttribute
             $appTypeAttribute.Mandatory = $false
 			
@@ -193,7 +270,7 @@ function New-IntuneMermaidGraph {
             )
             $excludeSupersededAppsParam.Value = $False
             $paramDictionary.Add('ExcludeSupersededApps', $excludeSupersededAppsParam)
-        }
+        }       
         return $paramDictionary
     }
 
@@ -202,42 +279,42 @@ function New-IntuneMermaidGraph {
             "Groups" = @("GroupMember.Read.All", "Group.Read.All", "Group.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All")
             "Apps" = @("DeviceManagementApps.Read.All", "DeviceManagementApps.ReadWrite.All")
             "Configuration" = @("DeviceManagementConfiguration.Read.All", "DeviceManagementConfiguration.ReadWrite.All")
-        }
-        
-        # Ensure required authentication header variable exists
-        if ($null -eq (Get-MgContext)) { 
-            $requiredScopesMessage = $requiredScopeCategories.Keys | ForEach-Object { 
-                "$($requiredScopeCategories[$_][0])"
-            }
-            throw "Microsoft Graph authentication required. Please run `"Connect-MgGraph -scopes $($requiredScopesMessage -join ', ')`" at a minimum."
-        }
-        else {
-            $currentScopes = (Get-MgContext).Scopes
-            $missingCategories = @()
+        }     
 
-            foreach ($category in $requiredScopeCategories.Keys) {
-                $categoryScopes = $requiredScopeCategories[$category]
-                $hasRequiredScope = $false
-                
-                foreach ($scope in $categoryScopes) {
-                    if ($scope -in $currentScopes) {
-                        $hasRequiredScope = $true
-                        break
+            # Ensure required authentication header variable exists
+            if ($null -eq (Get-MgContext)) { 
+                $requiredScopesMessage = $requiredScopeCategories.Keys | ForEach-Object { 
+                    "$($requiredScopeCategories[$_][0])"
+                }
+                throw "Microsoft Graph authentication required. Please run `"Connect-MgGraph -scopes $($requiredScopesMessage -join ', ')`" at a minimum."
+            }
+            else {
+                $currentScopes = (Get-MgContext).Scopes
+                $missingCategories = @()
+
+                foreach ($category in $requiredScopeCategories.Keys) {
+                    $categoryScopes = $requiredScopeCategories[$category]
+                    $hasRequiredScope = $false
+                    
+                    foreach ($scope in $categoryScopes) {
+                        if ($scope -in $currentScopes) {
+                            $hasRequiredScope = $true
+                            break
+                        }
+                    }
+                    
+                    if (-not $hasRequiredScope -and (Get-MgContext).AuthType -ne 'UserProvidedAccessToken') {
+                        $missingCategories += $category
                     }
                 }
                 
-                if (-not $hasRequiredScope -and (Get-MgContext).AuthType -ne 'UserProvidedAccessToken') {
-                    $missingCategories += $category
+                if ($missingCategories.Count -gt 0) {
+                    $missingScopesMessage = $missingCategories | ForEach-Object { 
+                        "${_}: $($requiredScopeCategories[$_] -join ' / ')"
+                    }
+                    throw "Microsoft Graph token found, but missing required scopes. Please ensure you have at least one permission from each category:`n$($missingScopesMessage -join "`n")"                              
                 }
             }
-            
-            if ($missingCategories.Count -gt 0) {
-                $missingScopesMessage = $missingCategories | ForEach-Object { 
-                    "${_}: $($requiredScopeCategories[$_] -join ' / ')"
-                }
-                throw "Microsoft Graph token found, but missing required scopes. Please ensure you have at least one permission from each category:`n$($missingScopesMessage -join "`n")"
-            }
-        }
 
         # Set script variable for error action preference
         $ErrorActionPreference = "Stop"
@@ -271,51 +348,62 @@ function New-IntuneMermaidGraph {
             }
             
             end {
-                # If there are groups to retrieve, fetch them in parallel if possible
+                # If there are groups to retrieve, fetch them if authentication is available
                 if ($groupsToRetrieve.Count -gt 0) {
-                    if ($PSVersionTable.PSEdition -eq 'Core' -and $groupsToRetrieve.Count -gt 1) {
-                        # PowerShell Core - use ForEach-Object -Parallel for multiple groups
-                        $maxConcurrentJobs = [Math]::Min(20, $groupsToRetrieve.Count) # Limit concurrent jobs
-                        $retrievedGroups = $groupsToRetrieve | ForEach-Object -ThrottleLimit $maxConcurrentJobs -Parallel {
-                            try {
-                                $groupData = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/directoryObjects/$_"
-                                [PSCustomObject]@{
-                                    Id          = $_
-                                    DisplayName = $groupData.displayName
-                                    Success     = $true
-                                }
-                            }
-                            catch {
-                                [PSCustomObject]@{
-                                    Id          = $_
-                                    DisplayName = "Group deleted from Microsoft Entra ID"
-                                    Success     = $false
-                                }
-                            }
-                        }
-                
-                        # Update cache with batch results
-                        foreach ($group in $retrievedGroups) {
-                            $script:groupCache[$group.Id] = @{
-                                DisplayName = $group.DisplayName.replace(".", "") # Remove periods from display name
-                                Shortname   = $group.DisplayName  # Store the unmodified name
+                    if ($null -eq (Get-MgContext)) {
+                        # No authentication available - use group IDs as display names
+                        foreach ($id in $groupsToRetrieve) {
+                            $script:groupCache[$id] = @{
+                                DisplayName = $id
+                                Shortname   = $id
                             }
                         }
                     }
                     else {
-                        # Sequential processing for Windows PowerShell or single group
-                        foreach ($id in $groupsToRetrieve) {
-                            try {
-                                $groupData = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/directoryObjects/$id"
-                                $script:groupCache[$id] = @{
-                                    DisplayName = $groupData.displayName.replace(".", "") # Remove periods from display name
-                                    Shortname   = $groupData.displayName  # Store the unmodified name
+                        if ($PSVersionTable.PSEdition -eq 'Core' -and $groupsToRetrieve.Count -gt 1) {
+                            # PowerShell Core - use ForEach-Object -Parallel for multiple groups
+                            $maxConcurrentJobs = [Math]::Min(20, $groupsToRetrieve.Count) # Limit concurrent jobs
+                            $retrievedGroups = $groupsToRetrieve | ForEach-Object -ThrottleLimit $maxConcurrentJobs -Parallel {
+                                try {
+                                    $groupData = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/directoryObjects/$_"
+                                    [PSCustomObject]@{
+                                        Id          = $_
+                                        DisplayName = $groupData.displayName
+                                        Success     = $true
+                                    }
+                                }
+                                catch {
+                                    [PSCustomObject]@{
+                                        Id          = $_
+                                        DisplayName = "Group deleted from Microsoft Entra ID"
+                                        Success     = $false
+                                    }
                                 }
                             }
-                            catch {
-                                $script:groupCache[$id] = @{
-                                    DisplayName = "Group deleted from Microsoft Entra ID"
-                                    Shortname   = "Group deleted from Microsoft Entra ID"
+                    
+                            # Update cache with batch results
+                            foreach ($group in $retrievedGroups) {
+                                $script:groupCache[$group.Id] = @{
+                                    DisplayName = $group.DisplayName.replace(".", "") # Remove periods from display name
+                                    Shortname   = $group.DisplayName  # Store the unmodified name
+                                }
+                            }
+                        }
+                        else {
+                            # Sequential processing for Windows PowerShell or single group
+                            foreach ($id in $groupsToRetrieve) {
+                                try {
+                                    $groupData = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/directoryObjects/$id"
+                                    $script:groupCache[$id] = @{
+                                        DisplayName = $groupData.displayName.replace(".", "") # Remove periods from display name
+                                        Shortname   = $groupData.displayName  # Store the unmodified name
+                                    }
+                                }
+                                catch {
+                                    $script:groupCache[$id] = @{
+                                        DisplayName = "Group deleted from Microsoft Entra ID"
+                                        Shortname   = "Group deleted from Microsoft Entra ID"
+                                    }
                                 }
                             }
                         }
@@ -361,12 +449,18 @@ function New-IntuneMermaidGraph {
             $uniqueFilterIds = $Items.assignments.target.deviceAndAppManagementAssignmentFilterId | Select-Object -Unique
             foreach ($filterId in $uniqueFilterIds) {
                 if ($filterId) {
-                    try {
-                        $filter = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters/$filterId"
-                        $filterDisplayNames[$filterId] = $filter.displayName.replace("(", "").replace(")", "")
+                    if ($null -eq (Get-MgContext)) {
+                        # No authentication available - use filter ID as display name
+                        $filterDisplayNames[$filterId] = $filterId
                     }
-                    catch {
-                        $filterDisplayNames[$filterId] = "Filter not found"
+                    else {
+                        try {
+                            $filter = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters/$filterId"
+                            $filterDisplayNames[$filterId] = $filter.displayName.replace("(", "").replace(")", "")
+                        }
+                        catch {
+                            $filterDisplayNames[$filterId] = "Filter not found"
+                        }
                     }
                 }
             }
@@ -496,33 +590,107 @@ function New-IntuneMermaidGraph {
                     )
                 }
 
-                # Handle the case where user selected no OS types or web apps
-                if ($appTypeFilter.Count -eq 0) {
-                    Write-Verbose "No specific OS selected, retrieving all applications with assignments"
-                    $allAppsAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=(isAssigned eq true)&`$expand=Assignments"
+                # Get application data - either from API or offline data
+                if ($Offline) {
+                    Write-Verbose "Using offline data for applications"
+                    $offlineData = $Data
+                    if ($offlineData -is [string]) {
+                        try {
+                            $offlineData = $offlineData | ConvertFrom-Json
+                        }
+                        catch {
+                            throw "Invalid JSON data provided. Please ensure the Data parameter contains valid JSON."
+                        }
+                    }
+                    
+                    # Check if this is a Graph API response object with a 'value' property
+                    if ($offlineData.value -and $offlineData.'@odata.context') {
+                        # This is a Graph API response object, extract the value array
+                        Write-Verbose "Detected Graph API response object, extracting .value property"
+                        $offlineData = $offlineData.value
+                    }
+                    
+                    # Handle different data structures
+                    if ($offlineData.mobileApps) {
+                        # Structured data with mobileApps property
+                        $allAppsAndAssignments = $offlineData.mobileApps
+                    }
+                    elseif ($offlineData -is [array]) {
+                        # Direct array of applications
+                        $allAppsAndAssignments = $offlineData
+                    }
+                    elseif ($offlineData -is [object] -and $offlineData.Count -eq 0) {
+                        # Empty object
+                        $allAppsAndAssignments = @()
+                    }
+                    else {
+                        # Assume it's a single application or unknown structure
+                        $allAppsAndAssignments = @($offlineData)
+                    }
+                    
+                    # Ensure the data is an array
+                    if ($allAppsAndAssignments -isnot [array]) {
+                        $allAppsAndAssignments = @($allAppsAndAssignments)
+                    }
+                    
+                    # Filter out apps with no assignments
+                    $allAppsAndAssignments = $allAppsAndAssignments | Where-Object { $_.assignments -and $_.assignments.Count -gt 0 }
+                    
+                    # Add appTypeName property for offline data to enable ApplicationType filtering
+                    foreach ($app in $allAppsAndAssignments) {
+                        $appType = $app.'@odata.type'
+                        if ($appType -and $AppTypeMap.ContainsKey($appType)) {
+                            $app | Add-Member -MemberType NoteProperty -Name 'appTypeName' -Value $AppTypeMap[$appType] -Force
+                        }
+                        elseif ($appType) {
+                            $app | Add-Member -MemberType NoteProperty -Name 'appTypeName' -Value $appType -Force
+                        }
+                        else {
+                            $app | Add-Member -MemberType NoteProperty -Name 'appTypeName' -Value "Unknown" -Force
+                        }
+                    }
+                    
+                    # Apply ApplicationType filtering to offline data if specified
+                    if ($PSBoundParameters.ContainsKey('ApplicationType') -and $PSBoundParameters.ApplicationType.Count -gt 0) {
+                        Write-Verbose "Filtering offline applications by specified ApplicationType: $($PSBoundParameters.ApplicationType -join ', ')"
+                        $allAppsAndAssignments = $allAppsAndAssignments | Where-Object { $_.appTypeName -in $PSBoundParameters.ApplicationType }
+                        Write-Verbose "Filtered to $($allAppsAndAssignments.Count) applications"
+                    }
+                    
+                    Write-Verbose "Using $($allAppsAndAssignments.Count) applications from offline data (after filtering)"
                 }
                 else {
-                    # Create OData filter for application types
-                    $typeFilter = $appTypeFilter | ForEach-Object { "isof('$_')" }
-                    $filterString = $typeFilter -join " or "
-                    
-                    Write-Verbose "Retrieving applications with assignments matching selected OS types: $($OperatingSystem -join ', ')"
-                    Write-Verbose "Using filter: $filterString"
-                    
-                    $allAppsAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=((isAssigned eq true) and ($filterString))&`$expand=Assignments"
-                }
+                    # Handle the case where user selected no OS types or web apps
+                    if ($appTypeFilter.Count -eq 0) {
+                        Write-Verbose "No specific OS selected, retrieving all applications with assignments"
+                        $allAppsAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=(isAssigned eq true)&`$expand=Assignments"
+                    }
+                    else {
+                        # Create OData filter for application types
+                        $typeFilter = $appTypeFilter | ForEach-Object { "isof('$_')" }
+                        $filterString = $typeFilter -join " or "
+                        
+                        Write-Verbose "Retrieving applications with assignments matching selected OS types: $($OperatingSystem -join ', ')"
+                        Write-Verbose "Using filter: $filterString"
+                        
+                        $allAppsAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=((isAssigned eq true) and ($filterString))&`$expand=Assignments"
+                    }
 
-                Write-Verbose "Retrieved $($allAppsAndAssignments.Count) applications with assignments"
+                    Write-Verbose "Retrieved $($allAppsAndAssignments.Count) applications with assignments"
+                }
                 
                 # Replace @odata.type with friendly names
                 Write-Verbose "Replacing @odata.type with friendly names"
                 foreach ($app in $allAppsAndAssignments) {
                     $appType = $app.'@odata.type'
-                    if ($AppTypeMap.ContainsKey($appType)) {
+                    if ($appType -and $AppTypeMap.ContainsKey($appType)) {
                         $app | Add-Member -MemberType NoteProperty -Name 'appTypeName' -Value $AppTypeMap[$appType] -Force
                     }
-                    else {
+                    elseif ($appType) {
                         $app | Add-Member -MemberType NoteProperty -Name 'appTypeName' -Value $appType -Force
+                    }
+                    else {
+                        $app | Add-Member -MemberType NoteProperty -Name 'appTypeName' -Value "Unknown" -Force
                     }
                 }
                 Write-Verbose "Friendly names added to all applications"
@@ -1034,27 +1202,148 @@ function New-IntuneMermaidGraph {
                         return $TemplateDisplayName
                     }
                     
-                    if ($profileTypeMap.ContainsKey($OdataType)) {
-                        return $profileTypeMap[$OdataType]
+                    # Use the passed ProfileTypeMap or try to access from parent scope
+                    $typeMap = if ($ProfileTypeMap) { $ProfileTypeMap } else { $script:profileTypeMap }
+                    
+                    if ($typeMap -and $typeMap.ContainsKey($OdataType)) {
+                        return $typeMap[$OdataType]
                     }
                     
                     return $OdataType
                 }
                 Write-Verbose "Get-ProfileTypeDisplayName helper function defined"
                 
-                # Get device configuration profiles expanding its assignments
-                Write-Verbose "Retrieving device configuration profiles"
-                $allConfigProfilesAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?`$expand=Assignments"
-                Write-Verbose "Retrieved $($allConfigProfilesAndAssignments.Count) configuration profiles"
+                # Get profiles data - either from API or offline data
+                if ($Offline) {
+                    Write-Verbose "Using offline data for profiles"
+                    $offlineData = $Data
+                    if ($offlineData -is [string]) {
+                        try {
+                            $offlineData = $offlineData | ConvertFrom-Json
+                        }
+                        catch {
+                            throw "Invalid JSON data provided. Please ensure the Data parameter contains valid JSON."
+                        }
+                    }
+                    
+                    # Check if this is a Graph API response object with a 'value' property
+                    if ($offlineData.value -and $offlineData.'@odata.context') {
+                        # This is a Graph API response object, extract the value array
+                        Write-Verbose "Detected Graph API response object, extracting .value property"
+                        $offlineData = $offlineData.value
+                    }
+                    
+                    # Handle different data structures
+                    if ($offlineData.deviceConfigurations -or $offlineData.configurationPolicies) {
+                        # Structured data with deviceConfigurations and/or configurationPolicies properties
+                        if ($offlineData.deviceConfigurations) {
+                            $allConfigProfilesAndAssignments = $offlineData.deviceConfigurations
+                            if ($allConfigProfilesAndAssignments -isnot [array]) {
+                                $allConfigProfilesAndAssignments = @($allConfigProfilesAndAssignments)
+                            }
+                        }
+                        else {
+                            $allConfigProfilesAndAssignments = @()
+                        }
+                        
+                        if ($offlineData.configurationPolicies) {
+                            $allConfigPoliciesAndAssignments = $offlineData.configurationPolicies
+                            if ($allConfigPoliciesAndAssignments -isnot [array]) {
+                                $allConfigPoliciesAndAssignments = @($allConfigPoliciesAndAssignments)
+                            }
+                        }
+                        else {
+                            $allConfigPoliciesAndAssignments = @()
+                        }
+                    }
+                    elseif ($offlineData -is [array]) {
+                        # Direct array of profiles - need to separate device configurations from configuration policies
+                        $allConfigProfilesAndAssignments = @()
+                        $allConfigPoliciesAndAssignments = @()
+                        
+                        foreach ($profile in $offlineData) {
+                            # Check if it's a Settings Catalog policy (configuration policy)
+                            if ($profile.templateReference -or $profile.name) {
+                                $allConfigPoliciesAndAssignments += $profile
+                            }
+                            else {
+                                # Assume it's a device configuration profile
+                                $allConfigProfilesAndAssignments += $profile
+                            }
+                        }
+                    }
+                    elseif ($offlineData -is [object] -and $offlineData.Count -eq 0) {
+                        # Empty object
+                        $allConfigProfilesAndAssignments = @()
+                        $allConfigPoliciesAndAssignments = @()
+                    }
+                    else {
+                        # Single profile object or unknown structure - determine type
+                        if ($offlineData.templateReference -or $offlineData.name) {
+                            $allConfigProfilesAndAssignments = @()
+                            $allConfigPoliciesAndAssignments = @($offlineData)
+                        }
+                        else {
+                            $allConfigProfilesAndAssignments = @($offlineData)
+                            $allConfigPoliciesAndAssignments = @()
+                        }
+                    }
+                    
+                    # Ensure arrays and filter out profiles without assignments
+                    if ($allConfigProfilesAndAssignments -isnot [array]) {
+                        $allConfigProfilesAndAssignments = @($allConfigProfilesAndAssignments)
+                    }
+                    if ($allConfigPoliciesAndAssignments -isnot [array]) {
+                        $allConfigPoliciesAndAssignments = @($allConfigPoliciesAndAssignments)
+                    }
+                    
+                    $allConfigProfilesAndAssignments = $allConfigProfilesAndAssignments | Where-Object { $_.assignments -and $_.assignments.Count -gt 0 }
+                    $allConfigPoliciesAndAssignments = $allConfigPoliciesAndAssignments | Where-Object { $_.assignments -and $_.assignments.Count -gt 0 }
+                    
+                    # Add ProfileType property for filtering
+                    foreach ($profile in $allConfigProfilesAndAssignments) {
+                        $profile | Add-Member -MemberType NoteProperty -Name 'ProfileType' -Value (Get-ProfileTypeDisplayName -OdataType $profile.'@odata.type') -Force
+                    }
+                    
+                    foreach ($policy in $allConfigPoliciesAndAssignments) {
+                        $templateDisplayName = $null
+                        if ($policy.templateReference -and $policy.templateReference.templateDisplayName) {
+                            $templateDisplayName = $policy.templateReference.templateDisplayName
+                        }
+                        $policy | Add-Member -MemberType NoteProperty -Name 'ProfileType' -Value (Get-ProfileTypeDisplayName -TemplateDisplayName $templateDisplayName -OdataType "Settings Catalog") -Force
+                        $policy | Add-Member -MemberType NoteProperty -Name 'TemplateDisplayName' -Value $templateDisplayName -Force
+                    }
+                    
+                    Write-Verbose "Using $($allConfigProfilesAndAssignments.Count) device configuration profiles and $($allConfigPoliciesAndAssignments.Count) configuration policies from offline data"
+                    
+                    # Apply PolicyType filtering to offline data if specified
+                    if ($PSBoundParameters.ContainsKey('PolicyType') -and $PSBoundParameters.PolicyType.Count -gt 0) {
+                        Write-Verbose "Filtering offline profiles by specified PolicyType: $($PSBoundParameters.PolicyType -join ', ')"
+                        $allConfigProfilesAndAssignments = $allConfigProfilesAndAssignments | Where-Object { 
+                            $_.ProfileType -in $PSBoundParameters.PolicyType 
+                        }
+                        $allConfigPoliciesAndAssignments = $allConfigPoliciesAndAssignments | Where-Object { 
+                            ($_.ProfileType -in $PSBoundParameters.PolicyType) -or 
+                            ($_.TemplateDisplayName -and $_.TemplateDisplayName -in $PSBoundParameters.PolicyType)
+                        }
+                        Write-Verbose "Filtered to $($allConfigProfilesAndAssignments.Count) device configuration profiles and $($allConfigPoliciesAndAssignments.Count) configuration policies"
+                    }
+                }
+                else {
+                    # Get device configuration profiles expanding its assignments
+                    Write-Verbose "Retrieving device configuration profiles"
+                    $allConfigProfilesAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?`$expand=Assignments"
+                    Write-Verbose "Retrieved $($allConfigProfilesAndAssignments.Count) configuration profiles"
 
-                # Remove any configuration profiles which do not have assignments
-                Write-Verbose "Filtering out configuration profiles without assignments"
-                $allConfigProfilesAndAssignments = $allConfigProfilesAndAssignments | Where-Object { $_.Assignments.Count -gt 0 }
-                
-                # Get configuration policies (Settings Catalog) with assignments
-                Write-Verbose "Retrieving configuration policies (Settings Catalog)"
-                $allConfigPoliciesAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=(isAssigned eq true)&`$expand=Assignments"
-                Write-Verbose "Retrieved $($allConfigPoliciesAndAssignments.Count) configuration policies"
+                    # Remove any configuration profiles which do not have assignments
+                    Write-Verbose "Filtering out configuration profiles without assignments"
+                    $allConfigProfilesAndAssignments = $allConfigProfilesAndAssignments | Where-Object { $_.Assignments.Count -gt 0 }
+                    
+                    # Get configuration policies (Settings Catalog) with assignments
+                    Write-Verbose "Retrieving configuration policies (Settings Catalog)"
+                    $allConfigPoliciesAndAssignments = Get-GraphDataWithPagination -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?`$filter=(isAssigned eq true)&`$expand=Assignments"
+                    Write-Verbose "Retrieved $($allConfigPoliciesAndAssignments.Count) configuration policies"
+                }
                 
                 # Initialize the flowchart
                 Write-Verbose "Initializing mermaid flowchart with direction: $Direction"
@@ -1069,7 +1358,11 @@ function New-IntuneMermaidGraph {
                         Write-Verbose "Split assignments into individual configuration profile objects"
 
                         # Store the original configuration profile temporarily
-                        $originalconfigurationprofiles = $allConfigProfilesAndAssignments.Clone()
+                        if ($allConfigProfilesAndAssignments -and $allConfigProfilesAndAssignments.Count -gt 0) {
+                            $originalconfigurationprofiles = $allConfigProfilesAndAssignments | ForEach-Object { $_ }
+                        } else {
+                            $originalconfigurationprofiles = @()
+                        }
 
                         # Clear the original collection
                         $allConfigProfilesAndAssignments = @()
@@ -1097,7 +1390,11 @@ function New-IntuneMermaidGraph {
                         Write-Verbose "Split assignments into individual configuration policiy objects"
 
                         # Store the original configuration policy temporarily
-                        $originalconfigurationpolicy = $allConfigPoliciesAndAssignments.Clone()
+                        if ($allConfigPoliciesAndAssignments -and $allConfigPoliciesAndAssignments.Count -gt 0) {
+                            $originalconfigurationpolicy = $allConfigPoliciesAndAssignments | ForEach-Object { $_ }
+                        } else {
+                            $originalconfigurationpolicy = @()
+                        }
 
                         # Clear the original collection
                         $allConfigPoliciesAndAssignments = @()
@@ -1109,6 +1406,7 @@ function New-IntuneMermaidGraph {
                                     $policyCopy = [PSCustomObject]@{
                                         displayName = $cfgpol.name
                                         ProfileType = Get-ProfileTypeDisplayName -TemplateDisplayName $cfgpol.templateReference.templateDisplayName -OdataType "Settings Catalog"
+                                        TemplateDisplayName = $cfgpol.templateReference.templateDisplayName
                                         description = $cfgpol.description
                                         assignments = @($assignment)
                                         OS          = Get-ProfileOS -Platform $cfgpol.platforms
@@ -1133,7 +1431,10 @@ function New-IntuneMermaidGraph {
                         # Filter by allPolicies by PolicyType, if specified
                         if ($PSBoundParameters.ContainsKey('PolicyType')) {
                             Write-Verbose "Filtering policies by specified PolicyType: $($PSBoundParameters.PolicyType -join ', ')"
-                            $allPolicies = $allPolicies | Where-Object { $_.ProfileType -in $PSBoundParameters.PolicyType }
+                            $allPolicies = $allPolicies | Where-Object { 
+                                ($_.ProfileType -in $PSBoundParameters.PolicyType) -or 
+                                ($_.TemplateDisplayName -and $_.TemplateDisplayName -in $PSBoundParameters.PolicyType)
+                            }
                             Write-Verbose "Filtered to $($allPolicies.Count) policies"
                         }
                         
@@ -1265,7 +1566,11 @@ function New-IntuneMermaidGraph {
                         Write-Verbose "Standardizing the output of $allConfigProfilesAndAssignments to later merge"
 
                         # Store the original configuration profile temporarily
-                        $originalconfigurationprofiles = $allConfigProfilesAndAssignments.Clone()
+                        if ($allConfigProfilesAndAssignments -and $allConfigProfilesAndAssignments.Count -gt 0) {
+                            $originalconfigurationprofiles = $allConfigProfilesAndAssignments | ForEach-Object { $_ }
+                        } else {
+                            $originalconfigurationprofiles = @()
+                        }
 
                         # Clear the original collection
                         $allConfigProfilesAndAssignments = @()
@@ -1287,7 +1592,11 @@ function New-IntuneMermaidGraph {
                         Write-Verbose "Standardizing the output of $allConfigPoliciesAndAssignments to later merge"
 
                         # Store the original configuration policy temporarily
-                        $originalconfigurationpolicy = $allConfigPoliciesAndAssignments.Clone()
+                        if ($allConfigPoliciesAndAssignments -and $allConfigPoliciesAndAssignments.Count -gt 0) {
+                            $originalconfigurationpolicy = $allConfigPoliciesAndAssignments | ForEach-Object { $_ }
+                        } else {
+                            $originalconfigurationpolicy = @()
+                        }
 
                         # Clear the original collection
                         $allConfigPoliciesAndAssignments = @()
@@ -1295,6 +1604,7 @@ function New-IntuneMermaidGraph {
                             $policyCopy = [PSCustomObject]@{
                                 displayName = $cfgpol.name
                                 ProfileType = Get-ProfileTypeDisplayName -TemplateDisplayName $cfgpol.templateReference.templateDisplayName -OdataType "Settings Catalog"
+                                TemplateDisplayName = $cfgpol.templateReference.templateDisplayName
                                 description = $cfgpol.description
                                 assignments = $cfgpol.assignments
                                 OS          = Get-ProfileOS -Platform $cfgpol.platforms
@@ -1335,7 +1645,10 @@ function New-IntuneMermaidGraph {
                         # Filter by allPolicies by PolicyType, if specified
                         if ($PSBoundParameters.ContainsKey('PolicyType')) {
                             Write-Verbose "Filtering policies by specified PolicyType: $($PSBoundParameters.PolicyType -join ', ')"
-                            $allPolicies = $allPolicies | Where-Object { $_.ProfileType -in $PSBoundParameters.PolicyType }
+                            $allPolicies = $allPolicies | Where-Object { 
+                                ($_.ProfileType -in $PSBoundParameters.PolicyType) -or 
+                                ($_.TemplateDisplayName -and $_.TemplateDisplayName -in $PSBoundParameters.PolicyType)
+                            }
                             Write-Verbose "Filtered to $($allPolicies.Count) policies"
                         }
                         

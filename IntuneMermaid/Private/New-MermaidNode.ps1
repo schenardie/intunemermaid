@@ -10,7 +10,7 @@ It supports creating nodes for applications and their assignments, including han
 Specifies the type of node to create. Valid values are "Application" and "Assignments".
 
 .PARAMETER appId
-The unique identifier (GUID) of the application.
+The unique identifier of the application. Can be a GUID string or any other unique identifier.
 
 .PARAMETER appName
 The name of the application. This parameter is mandatory when NodeType is "Application".
@@ -44,11 +44,11 @@ This function requires the Microsoft Graph PowerShell SDK to be installed and au
 function New-MermaidNode {
     param (
         [ValidateSet("Application", "Profile", "AppGroupedByAssignments", "AppGroupedByApplications", "ProfileGroupedByAssignments", "ProfileGroupedByProfile")][string]$NodeType,
-        [Parameter(Mandatory = $true)][guid]$appId,
+        [Parameter(Mandatory = $true)][string]$appId,
         [Parameter(Mandatory = $true)]$ID,
-        [Parameter(Mandatory = $true, ParameterSetName = "ApplicationSet")][array]$appName,
-        [Parameter(Mandatory = $false, ParameterSetName = "ApplicationSet")][string]$appImage,
-        [Parameter(Mandatory = $true, ParameterSetName = "AssignmentsSet")][array]$assignmentsInfo
+        [Parameter(Mandatory = $false)][string]$appName,
+        [Parameter(Mandatory = $false)][string]$appImage,
+        [Parameter(Mandatory = $false)][array]$assignmentsInfo
     )
 
     # Create a cache for group display names if it doesn't exist
