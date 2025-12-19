@@ -59,17 +59,17 @@ function Get-IntunePolicyTypes {
     )
     
     if (-not $Online) {
-        Write-Host "Device Configuration Profile Types (Mapped Friendly Names):" -ForegroundColor Green
-        Write-Host "These can be used with -PolicyType parameter in New-IntuneMermaidGraph" -ForegroundColor Yellow
-        Write-Host ""
+        Write-Verbose "Device Configuration Profile Types (Mapped Friendly Names):"
+        Write-Verbose "These can be used with -PolicyType parameter in New-IntuneMermaidGraph"
+        Write-Verbose ""
         
         $deviceConfigurationTypes | Sort-Object | ForEach-Object {
-            Write-Host "  • $_" -ForegroundColor Cyan
+            Write-Output "  • $_"
         }
         
-        Write-Host ""
-        Write-Host "To see Settings Catalog template names from your tenant, use:" -ForegroundColor Yellow
-        Write-Host "  Get-IntunePolicyTypes -Online" -ForegroundColor White
+        Write-Verbose ""
+        Write-Verbose "To see Settings Catalog template names from your tenant, use:"
+        Write-Verbose "  Get-IntunePolicyTypes -Online"
         
         return
     }
@@ -81,20 +81,39 @@ function Get-IntunePolicyTypes {
     }
     
     try {
-        Write-Host "Retrieving policy types from your Intune tenant..." -ForegroundColor Yellow
+        Write-Verbose "Retrieving policy types from your Intune tenant..."
+        
+        $allPolicyNames = [System.Collections.Generic.List[string]]::new()
         
         # Get Device Configuration profiles with pagination
-        Write-Host "`nDevice Configuration Profiles:" -ForegroundColor Green
+        Write-Verbose "Fetching Device Configuration Profiles..."
         $allDeviceConfigs = @()
-        $uri = "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations"
         
-        do {
-            $deviceConfigs = Invoke-MgGraphRequest -Method GET -Uri $uri
-            if ($deviceConfigs.value) {
-                $allDeviceConfigs += $deviceConfigs.value
+        try {
+            # Use Get-MgDeviceManagementDeviceConfiguration instead
+            $allDeviceConfigs = Get-MgDeviceManagementDeviceConfiguration -All -ErrorAction Stop
+            Write-Verbose "Found $($allDeviceConfigs.Count) device configuration profiles"
+        }
+        catch {
+            Write-Verbose "Warning: Could not retrieve device configurations: $($_.Exception.Message)"
+            Write-Verbose "Attempting alternative method..."
+            
+            # Fallback to direct API call without select
+            try {
+                $uri = "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations"
+                do {
+                    $deviceConfigs = Invoke-MgGraphRequest -Method GET -Uri $uri
+                    if ($deviceConfigs.value) {
+                        $allDeviceConfigs += $deviceConfigs.value
+                    }
+                    $uri = $deviceConfigs.'@odata.nextLink'
+                } while ($uri)
+                Write-Verbose "Found $($allDeviceConfigs.Count) device configuration profiles using fallback method"
             }
-            $uri = $deviceConfigs.'@odata.nextLink'
-        } while ($uri)
+            catch {
+                Write-Verbose "Warning: Fallback also failed. Skipping device configurations."
+            }
+        }
         
         if ($allDeviceConfigs.Count -gt 0) {
             $configTypes = $allDeviceConfigs | Group-Object '@odata.type' | Sort-Object Name
@@ -237,25 +256,42 @@ function Get-IntunePolicyTypes {
                 }
                 
                 if ($IncludeCount) {
-                    Write-Host "  • $friendlyName ($count)" -ForegroundColor Cyan
+                    $allPolicyNames.Add("$friendlyName ($count)")
                 } else {
-                    Write-Host "  • $friendlyName" -ForegroundColor Cyan
+                    $allPolicyNames.Add($friendlyName)
                 }
             }
         }
         
         # Get Settings Catalog policies with pagination
-        Write-Host "`nSettings Catalog Policies (Template Display Names):" -ForegroundColor Green
+        Write-Verbose "Fetching Settings Catalog Policies..."
         $allConfigPolicies = @()
-        $uri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
         
-        do {
-            $configPolicies = Invoke-MgGraphRequest -Method GET -Uri $uri
-            if ($configPolicies.value) {
-                $allConfigPolicies += $configPolicies.value
+        try {
+            # Use Get-MgDeviceManagementConfigurationPolicy instead
+            $allConfigPolicies = Get-MgDeviceManagementConfigurationPolicy -All -ErrorAction Stop
+            Write-Verbose "Found $($allConfigPolicies.Count) configuration policies"
+        }
+        catch {
+            Write-Verbose "Warning: Could not retrieve configuration policies: $($_.Exception.Message)"
+            Write-Verbose "Attempting alternative method..."
+            
+            # Fallback to direct API call
+            try {
+                $uri = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
+                do {
+                    $configPolicies = Invoke-MgGraphRequest -Method GET -Uri $uri
+                    if ($configPolicies.value) {
+                        $allConfigPolicies += $configPolicies.value
+                    }
+                    $uri = $configPolicies.'@odata.nextLink'
+                } while ($uri)
+                Write-Verbose "Found $($allConfigPolicies.Count) configuration policies using fallback method"
             }
-            $uri = $configPolicies.'@odata.nextLink'
-        } while ($uri)
+            catch {
+                Write-Verbose "Warning: Fallback also failed. Skipping configuration policies."
+            }
+        }
         
         if ($allConfigPolicies.Count -gt 0) {
             # Show policies with template display names
@@ -265,41 +301,42 @@ function Get-IntunePolicyTypes {
                 Sort-Object Name
             
             if ($templateNames.Count -gt 0) {
-                Write-Host "`n  Template-based Policies:" -ForegroundColor Yellow
+                Write-Verbose "Found $($templateNames.Count) unique template types"
                 foreach ($template in $templateNames) {
                     $templateName = $template.Name
                     $count = $template.Count
                     
                     if ($IncludeCount) {
-                        Write-Host "    • `"$templateName`" ($count)" -ForegroundColor Magenta
+                        $allPolicyNames.Add("$templateName ($count)")
                     } else {
-                        Write-Host "    • `"$templateName`"" -ForegroundColor Magenta
+                        $allPolicyNames.Add($templateName)
                     }
                 }
             }
             
             # Show policies without template display names (custom Settings Catalog)
             $customPolicies = $allConfigPolicies | 
-                Where-Object { -not $_.templateReference.templateDisplayName -or $_.templateReference.templateDisplayName.Trim() -eq "" } |
-                Group-Object platforms | 
-                Sort-Object Name
+                Where-Object { -not $_.templateReference.templateDisplayName -or $_.templateReference.templateDisplayName.Trim() -eq "" }
             
             if ($customPolicies.Count -gt 0) {
-                Write-Host "`n  Custom Settings Catalog Policies (by Platform):" -ForegroundColor Yellow
-                foreach ($platform in $customPolicies) {
-                    $platformName = $platform.Name
-                    $count = $platform.Count
-                    
-                    if ($IncludeCount) {
-                        Write-Host "    • $platformName ($count)" -ForegroundColor Cyan
-                    } else {
-                        Write-Host "    • $platformName" -ForegroundColor Cyan
-                    }
+                Write-Verbose "Found $($customPolicies.Count) custom Settings Catalog policies"
+                
+                if ($IncludeCount) {
+                    $allPolicyNames.Add("Settings Catalog ($($customPolicies.Count))")
+                } else {
+                    $allPolicyNames.Add("Settings Catalog")
                 }
             }
-        }   
+        }
+        
+        # Output unique sorted policy names
+        $allPolicyNames | Select-Object -Unique | Sort-Object | ForEach-Object {
+            Write-Output $_
+        }
     }
     catch {
         Write-Error "Failed to retrieve policy types: $($_.Exception.Message)"
+        Write-Verbose "Error details: $($_.Exception)"
+        Write-Verbose "Stack trace: $($_.ScriptStackTrace)"
     }
 }

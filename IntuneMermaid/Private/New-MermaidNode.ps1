@@ -63,27 +63,57 @@ function New-MermaidNode {
         )
 
         if (-not $script:groupCache.ContainsKey($groupId)) {
-            try {
-                $groupInfo = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/directoryObjects/$groupId").displayName
+            # If offline AND no Graph context, just echo the ID
+            # If offline but Graph context exists, resolve group names via API
+            if ($null -eq (Get-MgContext)) {
+                Write-Verbose "No Graph context available, using group ID: $groupId"
                 $script:groupCache[$groupId] = @{
-                    DisplayName = $groupInfo.replace(".", "") # Remove periods from display name
-                    Shortname   = $groupInfo  # Store the unmodified name
+                    DisplayName = $groupId
+                    Shortname   = $groupId
                 }
             }
-            catch {
-                $script:groupCache[$groupId] = @{
-                    DisplayName = "Group deleted from Microsoft Entra ID"
-                    Shortname   = "Group deleted from Microsoft Entra ID"
+            else {
+                try {
+                    Write-Verbose "Resolving group name for ID: $groupId"
+                    $groupInfo = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/directoryObjects/$groupId").displayName
+                    $script:groupCache[$groupId] = @{
+                        DisplayName = $groupInfo.replace(".", "")
+                        Shortname   = $groupInfo
+                    }
+                }
+                catch {
+                    Write-Verbose "Group $groupId not found or deleted: $_"
+                    $script:groupCache[$groupId] = @{
+                        DisplayName = "Deleted Group ($groupId)"
+                        Shortname   = "Deleted Group"
+                    }
                 }
             }
         }
-
         return $script:groupCache[$groupId]
     }
 
     # Cache for filter display names
     if (-not (Get-Variable -Name filterCache -Scope Script -ErrorAction SilentlyContinue)) {
         $script:filterCache = @{}
+    }
+
+    # Helper function to get group name from target
+    function Get-TargetGroupName {
+        param (
+            [object]$target
+        )
+
+        if ($target.'@odata.type' -match '#microsoft\.graph\.allLicensedUsersAssignmentTarget$') { 
+            return "All Users" 
+        }
+        elseif ($target.'@odata.type' -match '#microsoft\.graph\.allDevicesAssignmentTarget$') { 
+            return "All Devices" 
+        }
+        else {
+            $targetGroupId = $target.groupId
+            return (Get-GroupDisplayName -groupId $targetGroupId).Shortname
+        }
     }
 
     # Helper function to get filter display name with caching
@@ -93,15 +123,25 @@ function New-MermaidNode {
         )
 
         if (-not $script:filterCache.ContainsKey($filterId)) {
-            try {
-                $filterName = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters/${filterId}?`$select=displayName").displayName.replace("(", "").replace(")", "")
-                $script:filterCache[$filterId] = $filterName
+            if ([string]::IsNullOrWhiteSpace($filterId)) { return $null }
+            # If no Graph context, just echo the filter ID
+            # If Graph context exists (even in offline mode), resolve filter name via API
+            if ($null -eq (Get-MgContext)) {
+                Write-Verbose "No Graph context available, using filter ID: $filterId"
+                $script:filterCache[$filterId] = $filterId
             }
-            catch {
-                $script:filterCache[$filterId] = "Filter not found"
+            else {
+                try {
+                    Write-Verbose "Resolving filter name for ID: $filterId"
+                    $filterName = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/assignmentFilters/${filterId}?`$select=displayName").displayName.replace("(", "").replace(")", "")
+                    $script:filterCache[$filterId] = $filterName
+                }
+                catch {
+                    Write-Verbose "Filter $filterId not found: $_"
+                    $script:filterCache[$filterId] = "Deleted Filter ($filterId)"
+                }
             }
         }
-
         return $script:filterCache[$filterId]
     }
 
@@ -132,7 +172,12 @@ end
 
         "AppGroupedByAssignments" {
             $outputLines = @()
+            
+            # Don't create Unknown subgraph, let the application be directly under its platform group
+            Write-Verbose "Processing assignments. Count: $($assignmentsInfo.Count)"
+            
             foreach ($assignment in $assignmentsInfo) {
+                Write-Verbose "Processing assignment with target type: $($assignment.target.'@odata.type')"
                 switch ($assignment.intent) {
                     "required" { $intent = "R" }
                     "available" { $intent = "A" }
@@ -140,10 +185,11 @@ end
                     default { $intent = $assignment.intent }
                 }
                 $odataType = $assignment.target.'@odata.type'
+                Write-Verbose "Assignment odataType: $odataType"
 
-                # Use constants for special group IDs
-                if (($assignment.id -split '_')[0] -eq "acacacac-9df4-4c7d-9d50-4ef0226f57a9") { $GroupName = "All Users" }
-                elseif (($assignment.id -split '_')[0] -eq "adadadad-808e-44e2-905a-0b7873a8a531") { $GroupName = "All Devices" }
+                # Check odata.type for special groups
+                if ($assignment.target.'@odata.type' -eq "#microsoft.graph.allLicensedUsersAssignmentTarget") { $GroupName = "All Users" }
+                elseif ($assignment.target.'@odata.type' -eq "#microsoft.graph.allDevicesAssignmentTarget") { $GroupName = "All Devices" }
                 else {
                     $targetGroupId = $assignment.target.groupId
                     $GroupName = (Get-GroupDisplayName -groupId $targetGroupId).Shortname
@@ -161,9 +207,10 @@ end
                     continue
                 }
 
-                $name = "$smode$intent$ID"
+                $assignIndex = [array]::IndexOf($assignmentsInfo, $assignment)
+                $name = "$smode$intent$ID$assignIndex"
                 $entry = "$($appId)_$($ID) -->|$mode| $name"
-                $assignId = "a" + "$ID"
+                $assignId = "a" + "$ID" + $assignIndex
 
                 if ($outputLines -notcontains $entry) {
                     $outputLines += $entry
@@ -189,6 +236,8 @@ end
         }
         "AppGroupedByApplications" {
             $outputLines = @()
+            
+            # Don't create Unknown subgraph, let the application be directly under its platform group
             foreach ($assignment in $assignmentsInfo) {
                 switch ($assignment.intent) {
                     "required" { $intent = "R" }
@@ -198,8 +247,8 @@ end
                 }
                 $odataType = $assignment.target.'@odata.type'
 
-                if (($assignment.id -split '_')[0] -eq "acacacac-9df4-4c7d-9d50-4ef0226f57a9") { $GroupName = "All Users" }
-                elseif (($assignment.id -split '_')[0] -eq "adadadad-808e-44e2-905a-0b7873a8a531") { $GroupName = "All Devices" }
+                if ($assignment.target.'@odata.type' -eq "#microsoft.graph.allLicensedUsersAssignmentTarget") { $GroupName = "All Users" }
+                elseif ($assignment.target.'@odata.type' -eq "#microsoft.graph.allDevicesAssignmentTarget") { $GroupName = "All Devices" }
                 else {
                     $targetGroupId = $assignment.target.groupId
                     $GroupName = (Get-GroupDisplayName -groupId $targetGroupId).Shortname

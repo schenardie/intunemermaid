@@ -18,6 +18,7 @@ Default is "TB".
 
 .PARAMETER DisplayIcons
 Specifies whether to display icons for applications in the flowchart.
+This parameter is only available when Type is "Applications".
 When set to $True, application icons will be embedded in the flowchart as base64-encoded images.
 Default is $True.
 
@@ -186,10 +187,6 @@ function New-IntuneMermaidGraph {
         [Parameter(Mandatory = $false, ParameterSetName = "Offline")]
         [ValidateSet("TB", "TD", "BT", "LR", "RL")]
         [string]$Direction = "TB",
-		
-        [Parameter(Mandatory = $false, ParameterSetName = "Online")]
-        [Parameter(Mandatory = $false, ParameterSetName = "Offline")]
-        [bool]$DisplayIcons = $True,
 
         [Parameter(Mandatory = $true, ParameterSetName = "Offline")]
         [switch]$Offline,
@@ -243,34 +240,42 @@ function New-IntuneMermaidGraph {
             $appTypeParam.Value = @()
             $paramDictionary.Add('ApplicationType', $appTypeParam)
         }
-        # Only add AppendVersion parameter if Type is "Applications"
+        # Only add AppendVersion parameter if Type is "Applications" (switch allows both -AppendVersion and -AppendVersion $true/$false)
         if ($Type -eq "Applications") {
             $appendVersionAttribute = New-Object System.Management.Automation.ParameterAttribute
             $appendVersionAttribute.Mandatory = $false
-            $appendVersionAttribute.Position = 0
-            $appendVersionAttribute.ValueFromPipelineByPropertyName = $true
             $attributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
             $attributeCollection.Add($appendVersionAttribute)
             $appendVersionParam = New-Object System.Management.Automation.RuntimeDefinedParameter(
-            'AppendVersion', [bool], $attributeCollection
+                'AppendVersion', [switch], $attributeCollection
             )
-            $appendVersionParam.Value = $False
             $paramDictionary.Add('AppendVersion', $appendVersionParam)
         }
-        # Only add ExcludeSupersededApps parameter if Type is "Applications"
+        # Only add ExcludeSupersededApps parameter if Type is "Applications" (switch for same reasons)
         if ($Type -eq "Applications") {
             $excludeSupersededAppsAttribute = New-Object System.Management.Automation.ParameterAttribute
             $excludeSupersededAppsAttribute.Mandatory = $false
-            $excludeSupersededAppsAttribute.Position = 1
-            $excludeSupersededAppsAttribute.ValueFromPipelineByPropertyName = $true
             $attributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
             $attributeCollection.Add($excludeSupersededAppsAttribute)
             $excludeSupersededAppsParam = New-Object System.Management.Automation.RuntimeDefinedParameter(
-                'ExcludeSupersededApps', [bool], $attributeCollection
+                'ExcludeSupersededApps', [switch], $attributeCollection
             )
-            $excludeSupersededAppsParam.Value = $False
             $paramDictionary.Add('ExcludeSupersededApps', $excludeSupersededAppsParam)
-        }       
+        }
+        
+        # Only add DisplayIcons parameter if Type is "Applications"
+        if ($Type -eq "Applications") {
+            $displayIconsAttribute = New-Object System.Management.Automation.ParameterAttribute
+            $displayIconsAttribute.Mandatory = $false
+            $attributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
+            $attributeCollection.Add($displayIconsAttribute)
+            $displayIconsParam = New-Object System.Management.Automation.RuntimeDefinedParameter(
+                'DisplayIcons', [bool], $attributeCollection
+            )
+            $displayIconsParam.Value = $True
+            $paramDictionary.Add('DisplayIcons', $displayIconsParam)
+        }
+        
         return $paramDictionary
     }
 
@@ -281,46 +286,41 @@ function New-IntuneMermaidGraph {
             "Configuration" = @("DeviceManagementConfiguration.Read.All", "DeviceManagementConfiguration.ReadWrite.All")
         }     
 
-            # Ensure required authentication header variable exists
-            if ($null -eq (Get-MgContext)) { 
-                $requiredScopesMessage = $requiredScopeCategories.Keys | ForEach-Object { 
-                    "$($requiredScopeCategories[$_][0])"
-                }
-                throw "Microsoft Graph authentication required. Please run `"Connect-MgGraph -scopes $($requiredScopesMessage -join ', ')`" at a minimum."
-            }
-            else {
-                $currentScopes = (Get-MgContext).Scopes
-                $missingCategories = @()
+        # Expose offline state for downstream private helper functions
+        $script:IsOffline = [bool]$Offline
 
-                foreach ($category in $requiredScopeCategories.Keys) {
-                    $categoryScopes = $requiredScopeCategories[$category]
-                    $hasRequiredScope = $false
-                    
-                    foreach ($scope in $categoryScopes) {
-                        if ($scope -in $currentScopes) {
-                            $hasRequiredScope = $true
-                            break
+            # Authentication enforcement only for online mode.
+            if (-not $Offline) {
+                if ($null -eq (Get-MgContext)) { 
+                    $requiredScopesMessage = $requiredScopeCategories.Keys | ForEach-Object { "$($requiredScopeCategories[$_][0])" }
+                    throw "Microsoft Graph authentication required. Run Connect-MgGraph -Scopes $($requiredScopesMessage -join ', ') or use -Offline with provided data."
+                } else {
+                    $currentScopes = (Get-MgContext).Scopes
+                    $missingCategories = @()
+                    foreach ($category in $requiredScopeCategories.Keys) {
+                        $categoryScopes = $requiredScopeCategories[$category]
+                        $hasRequiredScope = $false
+                        foreach ($scope in $categoryScopes) {
+                            if ($scope -in $currentScopes) { $hasRequiredScope = $true; break }
                         }
+                        if (-not $hasRequiredScope -and (Get-MgContext).AuthType -ne 'UserProvidedAccessToken') { $missingCategories += $category }
                     }
-                    
-                    if (-not $hasRequiredScope -and (Get-MgContext).AuthType -ne 'UserProvidedAccessToken') {
-                        $missingCategories += $category
+                    if ($missingCategories.Count -gt 0) {
+                        $missingScopesMessage = $missingCategories | ForEach-Object { "${_}: $($requiredScopeCategories[$_] -join ' / ')" }
+                        throw "Microsoft Graph token found, but missing required scopes. Provide at least one scope per category or use -Offline mode:`n$($missingScopesMessage -join "`n")"
                     }
                 }
-                
-                if ($missingCategories.Count -gt 0) {
-                    $missingScopesMessage = $missingCategories | ForEach-Object { 
-                        "${_}: $($requiredScopeCategories[$_] -join ' / ')"
-                    }
-                    throw "Microsoft Graph token found, but missing required scopes. Please ensure you have at least one permission from each category:`n$($missingScopesMessage -join "`n")"                              
-                }
+            } else {
+                Write-Verbose "Offline mode: no Graph context detected; group/filter IDs will be used as names if not authenticated."
             }
 
         # Set script variable for error action preference
         $ErrorActionPreference = "Stop"
         
-        # Create a cache for group display names to reduce API calls
-        $script:groupCache = @{}
+        # Create thread-safe script-scoped variables with synchronized hashtables
+        $script:groupCache = [System.Collections.Hashtable]::Synchronized(@{})
+        $script:filterCache = [System.Collections.Hashtable]::Synchronized(@{})
+        $script:IsOffline = [bool]$Offline
         
         # Helper function to get group display name with caching
         function Get-GroupDisplayName {
@@ -330,12 +330,8 @@ function New-IntuneMermaidGraph {
             )
             
             begin {
-                # Initialize the cache if it doesn't exist yet
-                if (-not $script:groupCache) {
-                    $script:groupCache = @{}
-                }
-            
                 # Collection for group IDs that need to be retrieved
+                # Script:groupCache is already initialized in parent begin block
                 $groupsToRetrieve = @()
             }
             
@@ -375,7 +371,8 @@ function New-IntuneMermaidGraph {
                                 catch {
                                     [PSCustomObject]@{
                                         Id          = $_
-                                        DisplayName = "Group deleted from Microsoft Entra ID"
+                                        DisplayName = "Deleted Group ($_)"
+                                        ShortName   = "Deleted Group"
                                         Success     = $false
                                     }
                                 }
@@ -383,9 +380,17 @@ function New-IntuneMermaidGraph {
                     
                             # Update cache with batch results
                             foreach ($group in $retrievedGroups) {
-                                $script:groupCache[$group.Id] = @{
-                                    DisplayName = $group.DisplayName.replace(".", "") # Remove periods from display name
-                                    Shortname   = $group.DisplayName  # Store the unmodified name
+                                if ($group.Success) {
+                                    $displayNameCleaned = $group.DisplayName -replace '\.', ''  # Remove all periods from display name
+                                    $script:groupCache[$group.Id] = @{
+                                        DisplayName = $displayNameCleaned
+                                        Shortname   = $group.DisplayName  # Store the unmodified name
+                                    }
+                                } else {
+                                    $script:groupCache[$group.Id] = @{
+                                        DisplayName = $group.DisplayName
+                                        Shortname   = $group.ShortName
+                                    }
                                 }
                             }
                         }
@@ -394,15 +399,18 @@ function New-IntuneMermaidGraph {
                             foreach ($id in $groupsToRetrieve) {
                                 try {
                                     $groupData = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/directoryObjects/$id"
+                                    $displayNameCleaned = $groupData.displayName -replace '\.', ''  # Remove all periods from display name
                                     $script:groupCache[$id] = @{
-                                        DisplayName = $groupData.displayName.replace(".", "") # Remove periods from display name
+                                        DisplayName = $displayNameCleaned
                                         Shortname   = $groupData.displayName  # Store the unmodified name
                                     }
                                 }
                                 catch {
+                                    # Group was deleted or not found
+                                    Write-Verbose "Group $id not found or deleted: $_"
                                     $script:groupCache[$id] = @{
-                                        DisplayName = "Group deleted from Microsoft Entra ID"
-                                        Shortname   = "Group deleted from Microsoft Entra ID"
+                                        DisplayName = "Deleted Group ($id)"
+                                        Shortname   = "Deleted Group"
                                     }
                                 }
                             }
@@ -515,7 +523,8 @@ function New-IntuneMermaidGraph {
                     '#microsoft.graph.iosIPadOSWebClip'           = "iOS/iPadOS web clip" 
                     '#microsoft.graph.iosLobApp'                  = "iOS line-of-business app" 
                     '#microsoft.graph.iosStoreApp'                = "iOS store app" 
-                    '#microsoft.graph.iosVppApp'                  = "iOS volume purchase program app" 
+                    '#microsoft.graph.iosVppApp'                  = "iOS volume purchase program app"
+                    '#microsoft.graph.iosWebClip'                  = "iOS/iPadOS web clip"
                     '#microsoft.graph.macOSDmgApp'                = "macOS app (DMG)" 
                     '#microsoft.graph.macOSLobApp'                = "macOS line-of-business app" 
                     '#microsoft.graph.macOSMicrosoftDefenderApp'  = "Microsoft Defender ATP (macOS)" 
@@ -593,39 +602,54 @@ function New-IntuneMermaidGraph {
                 # Get application data - either from API or offline data
                 if ($Offline) {
                     Write-Verbose "Using offline data for applications"
+                    Write-Verbose "Input data type: $($Data.GetType().Name)"
+                    if ($Data.value) {
+                        Write-Verbose "Data has 'value' property with $($Data.value.Count) items"
+                    }
+                    
                     $offlineData = $Data
                     if ($offlineData -is [string]) {
+                        Write-Verbose "Converting string input to object"
                         try {
                             $offlineData = $offlineData | ConvertFrom-Json
+                            Write-Verbose "Successfully converted JSON string to object"
                         }
                         catch {
                             throw "Invalid JSON data provided. Please ensure the Data parameter contains valid JSON."
                         }
                     }
                     
-                    # Check if this is a Graph API response object with a 'value' property
-                    if ($offlineData.value -and $offlineData.'@odata.context') {
-                        # This is a Graph API response object, extract the value array
-                        Write-Verbose "Detected Graph API response object, extracting .value property"
-                        $offlineData = $offlineData.value
-                    }
-                    
                     # Handle different data structures
-                    if ($offlineData.mobileApps) {
-                        # Structured data with mobileApps property
-                        $allAppsAndAssignments = $offlineData.mobileApps
-                    }
-                    elseif ($offlineData -is [array]) {
-                        # Direct array of applications
+                    Write-Verbose "Processing offline data structure type: $($offlineData.GetType().Name)"
+
+                    # If it's an array (from ConvertFrom-Json of copied data), use it directly
+                    if ($offlineData -is [array]) {
+                        Write-Verbose "Processing direct array with $($offlineData.Count) items"
                         $allAppsAndAssignments = $offlineData
                     }
+                    # If it's a Graph API response object
+                    elseif ($offlineData.value -and $offlineData.'@odata.context') {
+                        Write-Verbose "Detected Graph API response object, extracting .value property"
+                        $allAppsAndAssignments = $offlineData.value
+                    }
+                    # If it has a mobileApps property
+                    elseif ($offlineData.mobileApps) {
+                        Write-Verbose "Found mobileApps property with $($offlineData.mobileApps.Count) items"
+                        $allAppsAndAssignments = $offlineData.mobileApps
+                    }
                     elseif ($offlineData -is [object] -and $offlineData.Count -eq 0) {
-                        # Empty object
+                        Write-Verbose "Empty object detected"
                         $allAppsAndAssignments = @()
                     }
                     else {
-                        # Assume it's a single application or unknown structure
+                        Write-Verbose "Single item or unknown structure - wrapping in array"
                         $allAppsAndAssignments = @($offlineData)
+                    }
+                    
+                    Write-Verbose "Application assignments structure check:"
+                    if ($allAppsAndAssignments.Count -gt 0) {
+                        Write-Verbose "First item assignments count: $($allAppsAndAssignments[0].assignments.Count)"
+                        Write-Verbose "First item @odata.type: $($allAppsAndAssignments[0].'@odata.type')"
                     }
                     
                     # Ensure the data is an array
@@ -702,7 +726,9 @@ function New-IntuneMermaidGraph {
                     Write-Verbose "Filtered to $($allAppsAndAssignments.Count) applications"
                 }
                 # If display icons are enabled, retrieve icons for each application
-                if ($DisplayIcons) {
+                # DisplayIcons defaults to $True, so check if it exists and is not $False
+                $shouldDisplayIcons = (-not $PSBoundParameters.ContainsKey('DisplayIcons')) -or ($PSBoundParameters.DisplayIcons -eq $True)
+                if ($shouldDisplayIcons) {
                     Write-Verbose "Retrieving icons for each application"
                     # Check if running in PowerShell Core (supports parallel processing)
                     if ($PSVersionTable.PSEdition -eq 'Core') {
@@ -736,8 +762,8 @@ function New-IntuneMermaidGraph {
                     }
                 }
 
-                # If AppendVersion is specified, append the version to the display name
-                if ($PSBoundParameters.ContainsKey('AppendVersion') -and $PSBoundParameters.AppendVersion) {
+                # If AppendVersion provided (switch present OR explicitly passed $true), append the version
+                if ($PSBoundParameters.ContainsKey('AppendVersion') -and (($PSBoundParameters.AppendVersion -is [bool] -and $PSBoundParameters.AppendVersion) -or ($PSBoundParameters.AppendVersion -is [System.Management.Automation.SwitchParameter] -and $PSBoundParameters.AppendVersion.IsPresent))) {
                     Write-Verbose "Appending version to display name for each application"
                     foreach ($app in $allAppsAndAssignments) {
                         if ($app.displayVersion) {
@@ -746,8 +772,8 @@ function New-IntuneMermaidGraph {
                     }
                 }
 
-                #If ExcludeSupersededApps is specified, filter out superseded applications
-                if ($PSBoundParameters.ContainsKey('ExcludeSupersededApps') -and $PSBoundParameters.ExcludeSupersededApps) {
+                # If ExcludeSupersededApps provided (switch present OR explicitly passed $true), filter superseded apps
+                if ($PSBoundParameters.ContainsKey('ExcludeSupersededApps') -and (($PSBoundParameters.ExcludeSupersededApps -is [bool] -and $PSBoundParameters.ExcludeSupersededApps) -or ($PSBoundParameters.ExcludeSupersededApps -is [System.Management.Automation.SwitchParameter] -and $PSBoundParameters.ExcludeSupersededApps.IsPresent))) {
                     Write-Verbose "Excluding superseded applications from the flowchart"
                     $allAppsAndAssignments = $allAppsAndAssignments | Where-Object { $_.supersedingAppCount -eq 0 }
                     Write-Verbose "Filtered to $($allAppsAndAssignments.Count) applications after excluding superseded apps"
@@ -789,10 +815,35 @@ function New-IntuneMermaidGraph {
                         $allAppsAndAssignments = $allAppsAndAssignments | Sort-Object -Property displayName
                         Write-Verbose "Created $($allAppsAndAssignments.Count) individual application assignment objects"
                     
-                        # Get filter display names
+                        # Initialize filter cache if not exists
+                        if (-not (Get-Variable -Name filterCache -Scope Script -ErrorAction SilentlyContinue)) { $script:filterCache = @{} }
+                        
+                        # Pre-seed filter cache from enriched offline data (filterDisplayName already resolved by backend)
+                        Write-Verbose "Pre-seeding filter cache from enriched data"
+                        $preSeededCount = 0
+                        foreach ($app in $allAppsAndAssignments) {
+                            if ($app.assignments) {
+                                foreach ($assignment in $app.assignments) {
+                                    if ($assignment.target.deviceAndAppManagementAssignmentFilterId -and $assignment.target.filterDisplayName) {
+                                        $filterId = $assignment.target.deviceAndAppManagementAssignmentFilterId
+                                        if (-not $script:filterCache.ContainsKey($filterId)) {
+                                            $script:filterCache[$filterId] = $assignment.target.filterDisplayName
+                                            $preSeededCount++
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Write-Verbose "Pre-seeded $preSeededCount filter names from enriched data"
+                        
+                        # Get filter display names (will use cache for already-seeded values)
                         Write-Verbose "Getting filter display names"
                         $filterDisplayNames = Get-FilterDisplayNames -Items $allAppsAndAssignments
                         Write-Verbose "Retrieved $($filterDisplayNames.Count) filter display names"
+                        # Seed any remaining filters into cache
+                        foreach ($kv in $filterDisplayNames.GetEnumerator()) {
+                            if (-not $script:filterCache.ContainsKey($kv.Key)) { $script:filterCache[$kv.Key] = $kv.Value }
+                        }
                         
                         # Group applications by typeName
                         Write-Verbose "Grouping applications by type name"
@@ -884,7 +935,7 @@ function New-IntuneMermaidGraph {
                                         Write-Verbose "Processing application: $($appinfo.displayName)"
                                         $appIdSuffix = "$groupPrefix-" + ([array]::IndexOf($groupinfo.Group, $appinfo)).ToString()
                                         
-                                        if ($DisplayIcons) {
+                                        if ($shouldDisplayIcons) {
                                             if ($appinfo.largeIcon) {
                                                 Write-Verbose "Adding application with icon"
                                                 $mermaidFlowchart += "`n" + (New-MermaidNode -NodeType Application -appId $appinfo.id -appName $appinfo.displayName -appimage $(Convert-Base64Image -base64String $appinfo.largeIcon) -ID $appIdSuffix)
@@ -940,10 +991,35 @@ function New-IntuneMermaidGraph {
                             Write-Verbose "No entra group IDs found to pre-populate in cache"
                         }
 
+                        # Initialize filter cache if not exists
+                        if (-not (Get-Variable -Name filterCache -Scope Script -ErrorAction SilentlyContinue)) { $script:filterCache = @{} }
+                        
+                        # Pre-seed filter cache from enriched offline data
+                        Write-Verbose "Pre-seeding filter cache from enriched data"
+                        $preSeededCount = 0
+                        foreach ($app in $allAppsAndAssignments) {
+                            if ($app.assignments) {
+                                foreach ($assignment in $app.assignments) {
+                                    if ($assignment.target.deviceAndAppManagementAssignmentFilterId -and $assignment.target.filterDisplayName) {
+                                        $filterId = $assignment.target.deviceAndAppManagementAssignmentFilterId
+                                        if (-not $script:filterCache.ContainsKey($filterId)) {
+                                            $script:filterCache[$filterId] = $assignment.target.filterDisplayName
+                                            $preSeededCount++
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Write-Verbose "Pre-seeded $preSeededCount filter names from enriched data"
+                        
                         # Get filter display names
                         Write-Verbose "Getting filter display names"
                         $filterDisplayNames = Get-FilterDisplayNames -Items $allAppsAndAssignments
                         Write-Verbose "Retrieved $($filterDisplayNames.Count) filter display names"
+                        # Seed any remaining filters into cache
+                        foreach ($kv in $filterDisplayNames.GetEnumerator()) {
+                            if (-not $script:filterCache.ContainsKey($kv.Key)) { $script:filterCache[$kv.Key] = $kv.Value }
+                        }
                         
                         # Group applications by typeName
                         Write-Verbose "Grouping applications by type name"
@@ -994,7 +1070,7 @@ function New-IntuneMermaidGraph {
                                                     ([array]::IndexOf($OS.group, $AppType)).ToString() + "-" + 
                                                     ([array]::IndexOf($AppType.Group, $appinfo)).ToString())"
                                     
-                                    if ($DisplayIcons) {
+                                    if ($shouldDisplayIcons) {
                                         if ($appinfo.largeIcon) {
                                             Write-Verbose "Adding application with icon"
                                             $mermaidFlowchart += "`n" + (New-MermaidNode -NodeType Application -appId $appinfo.id -appName $appinfo.displayName -appimage $(Convert-Base64Image -base64String $appinfo.largeIcon) -ID $appIdSuffix)
@@ -1300,6 +1376,18 @@ function New-IntuneMermaidGraph {
                     $allConfigProfilesAndAssignments = $allConfigProfilesAndAssignments | Where-Object { $_.assignments -and $_.assignments.Count -gt 0 }
                     $allConfigPoliciesAndAssignments = $allConfigPoliciesAndAssignments | Where-Object { $_.assignments -and $_.assignments.Count -gt 0 }
                     
+                    Write-Verbose "After filtering: $($allConfigProfilesAndAssignments.Count) device configs with assignments, $($allConfigPoliciesAndAssignments.Count) config policies with assignments"
+                    
+                    # Debug: Log sample profile to check structure
+                    if ($allConfigProfilesAndAssignments.Count -gt 0) {
+                        $sample = $allConfigProfilesAndAssignments[0]
+                        Write-Verbose "Sample device config: displayName=$($sample.displayName), @odata.type=$($sample.'@odata.type'), assignments=$($sample.assignments.Count)"
+                    }
+                    if ($allConfigPoliciesAndAssignments.Count -gt 0) {
+                        $sample = $allConfigPoliciesAndAssignments[0]
+                        Write-Verbose "Sample config policy: name=$($sample.name), displayName=$($sample.displayName), @odata.type=$($sample.'@odata.type'), templateReference=$($sample.templateReference -ne $null), assignments=$($sample.assignments.Count)"
+                    }
+                    
                     # Add ProfileType property for filtering
                     foreach ($profile in $allConfigProfilesAndAssignments) {
                         $profile | Add-Member -MemberType NoteProperty -Name 'ProfileType' -Value (Get-ProfileTypeDisplayName -OdataType $profile.'@odata.type') -Force
@@ -1422,6 +1510,27 @@ function New-IntuneMermaidGraph {
                         Write-Verbose "Combining all policies and profiles"
                         $allPolicies = @() + $allConfigProfilesAndAssignments + $allConfigPoliciesAndAssignments
                         Write-Verbose "Total combined policies: $($allPolicies.Count)"
+                        
+                        # Initialize filter cache if not exists
+                        if (-not (Get-Variable -Name filterCache -Scope Script -ErrorAction SilentlyContinue)) { $script:filterCache = @{} }
+                        
+                        # Pre-seed filter cache from enriched offline data
+                        Write-Verbose "Pre-seeding filter cache from enriched data"
+                        $preSeededCount = 0
+                        foreach ($policy in $allPolicies) {
+                            if ($policy.assignments) {
+                                foreach ($assignment in $policy.assignments) {
+                                    if ($assignment.target.deviceAndAppManagementAssignmentFilterId -and $assignment.target.filterDisplayName) {
+                                        $filterId = $assignment.target.deviceAndAppManagementAssignmentFilterId
+                                        if (-not $script:filterCache.ContainsKey($filterId)) {
+                                            $script:filterCache[$filterId] = $assignment.target.filterDisplayName
+                                            $preSeededCount++
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Write-Verbose "Pre-seeded $preSeededCount filter names from enriched data"
                         
                         # Get filter display names
                         Write-Verbose "Getting filter display names"
@@ -1619,6 +1728,27 @@ function New-IntuneMermaidGraph {
                         $allPolicies = @() + $allConfigProfilesAndAssignments + $allConfigPoliciesAndAssignments
                         Write-Verbose "Total combined policies: $($allPolicies.Count)"
                         
+                        # Initialize filter cache if not exists
+                        if (-not (Get-Variable -Name filterCache -Scope Script -ErrorAction SilentlyContinue)) { $script:filterCache = @{} }
+                        
+                        # Pre-seed filter cache from enriched offline data
+                        Write-Verbose "Pre-seeding filter cache from enriched data"
+                        $preSeededCount = 0
+                        foreach ($policy in $allPolicies) {
+                            if ($policy.assignments) {
+                                foreach ($assignment in $policy.assignments) {
+                                    if ($assignment.target.deviceAndAppManagementAssignmentFilterId -and $assignment.target.filterDisplayName) {
+                                        $filterId = $assignment.target.deviceAndAppManagementAssignmentFilterId
+                                        if (-not $script:filterCache.ContainsKey($filterId)) {
+                                            $script:filterCache[$filterId] = $assignment.target.filterDisplayName
+                                            $preSeededCount++
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Write-Verbose "Pre-seeded $preSeededCount filter names from enriched data"
+                        
                         # Get filter display names
                         Write-Verbose "Getting filter display names"
                         $filterDisplayNames = Get-FilterDisplayNames -Items $allPolicies
@@ -1722,5 +1852,12 @@ function New-IntuneMermaidGraph {
                 }
             }
         }
+    }
+
+    End {
+        # Clean up script-scoped variables
+        Remove-Variable -Scope Script -Name groupCache -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Script -Name filterCache -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Script -Name IsOffline -ErrorAction SilentlyContinue
     }
 }
